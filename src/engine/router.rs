@@ -5,11 +5,13 @@ use std::sync::Arc;
 use crate::domain::SearchQuery;
 use crate::plugins::PluginTool;
 use super::llm::{LlmService, LlmIntent};
+use super::vision::VisionEngine;
 
 pub struct SystemRouter {
     plugins: Vec<Box<dyn PluginTool>>,
     llm: Arc<LlmService>,
     domain_keywords: HashMap<String, Vec<String>>,
+    vision: Arc<VisionEngine>,
 }
 
 impl SystemRouter {
@@ -21,6 +23,7 @@ impl SystemRouter {
             plugins,
             llm: Arc::new(LlmService::new()),
             domain_keywords,
+            vision: Arc::new(VisionEngine::new()),
         }
     }
 
@@ -38,6 +41,25 @@ impl SystemRouter {
         F: FnMut(String),
     {
         let parsed: Result<serde_json::Value, _> = serde_json::from_str(request_payload);
+        
+        // PHASE 1: Intercept Vision IPC Requests from GNOME Extension
+        if let Ok(ref json) = parsed {
+            if json["action"].as_str() == Some("extract_snip") {
+                if let Some(path) = json["path"].as_str() {
+                    send_chunk(serde_json::json!({"status": "processing", "message": "Analyzing image..."}).to_string());
+                    let result = self.vision.process_image(path);
+                    send_chunk(serde_json::json!({
+                        "status": "final",
+                        "mode": "vision_extraction",
+                        "results": result
+                    }).to_string());
+                } else {
+                    send_chunk(r#"{"status": "error", "message": "Missing path for extraction"}"#.to_string());
+                }
+                return;
+            }
+        }
+
         let query_text = match parsed {
             Ok(json) => json["query"].as_str().unwrap_or("").to_string(),
             Err(_) => {
@@ -156,7 +178,8 @@ impl SystemRouter {
             LlmIntent::SynthesizeAnswer => {
                 send_chunk(serde_json::json!({"status": "synthesizing", "message": "Reading documents..."}).to_string());
                 
-                let answer = self.llm.generate_synthesis(&search_query.raw_text, &fast_results);
+                // Passed `.clone()` so it takes an owned Vec without killing the fast_results variable
+                let answer = self.llm.generate_synthesis(&search_query.raw_text, fast_results.clone());
                 
                 let final_payload: Vec<_> = fast_results.into_iter().map(|mut r| {
                     r.full_context = None;

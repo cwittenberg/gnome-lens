@@ -5,6 +5,7 @@ pub mod pdf;
 pub mod office;
 pub mod spreadsheet;
 pub mod legacy;
+pub mod image; // Phase 3: Added image extractor module
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -49,6 +50,7 @@ impl IngestionPipeline {
                 Box::new(office::ModernOfficeExtractor),
                 Box::new(spreadsheet::SpreadsheetExtractor),
                 Box::new(legacy::LegacyDocExtractor),
+                Box::new(image::ImageExtractor::new()), // Phase 3: Registered native Vision Engine Extractor
             ],
             domain_keywords,
         }

@@ -1,6 +1,7 @@
 // src/engine/llm.rs
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::Write;
 
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -41,15 +42,17 @@ impl LlmService {
     }
 
     fn generate_text(&self, prompt: &str, max_tokens: usize) -> String {
-        // Safely acquire the lock, recovering if a previous thread panicked
         let engine = match self.engine.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         
         let n_ctx_limit: u32 = 4096;
+        let n_batch_limit: u32 = 512;
+        
         let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(std::num::NonZeroU32::new(n_ctx_limit)); 
+            .with_n_ctx(std::num::NonZeroU32::new(n_ctx_limit))
+            .with_n_batch(n_batch_limit); 
         
         let mut ctx = match engine.model.new_context(&engine.backend, ctx_params) {
             Ok(c) => c,
@@ -59,7 +62,6 @@ impl LlmService {
         let mut tokens_list = engine.model.str_to_token(prompt, llama_cpp_2::model::AddBos::Always)
             .unwrap_or_default();
 
-        // Guard against token limit overflows which caused the worker panic
         let safe_max = if max_tokens > n_ctx_limit as usize { (n_ctx_limit / 2) as usize } else { max_tokens };
         let max_prompt_len = (n_ctx_limit as usize).saturating_sub(safe_max).saturating_sub(10);
         
@@ -71,25 +73,39 @@ impl LlmService {
             return String::new(); 
         }
 
-        let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(n_ctx_limit as usize, 1);
-        let last_index = tokens_list.len().saturating_sub(1);
+        println!("[LLM] Ingesting prompt ({} tokens)...", tokens_list.len());
         
-        for (i, token) in tokens_list.into_iter().enumerate() {
-            if batch.add(token, i as i32, &[0], i == last_index).is_err() {
-                break;
+        let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(n_batch_limit as usize, 1);
+        let mut n_cur = 0;
+
+        for chunk in tokens_list.chunks(n_batch_limit as usize) {
+            batch.clear();
+            let is_last_chunk = n_cur + chunk.len() == tokens_list.len();
+            
+            for (i, &token) in chunk.iter().enumerate() {
+                let is_last_token = is_last_chunk && (i == chunk.len() - 1);
+                if batch.add(token, (n_cur + i) as i32, &[0], is_last_token).is_err() {
+                    return String::new();
+                }
             }
+            
+            if ctx.decode(&mut batch).is_err() {
+                return String::new();
+            }
+            n_cur += chunk.len();
+            print!(".");
+            let _ = std::io::stdout().flush();
         }
+        
+        println!(" [Done]");
+        print!("[LLM] Generating: ");
+        let _ = std::io::stdout().flush();
 
-        if ctx.decode(&mut batch).is_err() {
-            return String::new();
-        }
-
-        let mut n_cur = batch.n_tokens();
         let mut output = String::new();
         let mut decoder = encoding_rs::UTF_8.new_decoder();
-        let absolute_max = (prompt.len() + max_tokens).min(n_ctx_limit as usize);
+        let absolute_max = (tokens_list.len() + max_tokens).min(n_ctx_limit as usize);
 
-        while (n_cur as usize) <= absolute_max {
+        while n_cur < absolute_max {
             let candidates = ctx.candidates_ith(batch.n_tokens() - 1);
             
             let mut best_token = engine.model.token_eos();
@@ -110,9 +126,16 @@ impl LlmService {
                 .unwrap_or_default();
             
             output.push_str(&token_str);
+            
+            print!("{}", token_str);
+            let _ = std::io::stdout().flush();
+
+            if output.contains("<|end|>") || output.contains("<|user|>") || output.contains("<|assistant|>") {
+                break;
+            }
 
             batch.clear();
-            if batch.add(best_token, n_cur, &[0], true).is_err() {
+            if batch.add(best_token, n_cur as i32, &[0], true).is_err() {
                 break;
             }
             
@@ -122,6 +145,7 @@ impl LlmService {
             n_cur += 1;
         }
 
+        println!("\n[LLM] Request complete.");
         output
     }
 
@@ -132,7 +156,7 @@ impl LlmService {
         
         let filter_triggers = [
             "less than", "greater than", "more than", "under ", "over ", 
-            "below ", "above ", "without ", "exactly ", "minder dan", "meer dan"
+            "below ", "above ", "without ", "exactly ", "minder dan", "meer dan", "contain"
         ];
         if filter_triggers.iter().any(|&t| lower.contains(t)) {
             return LlmIntent::FilterResults;
@@ -178,32 +202,94 @@ impl LlmService {
 
         if let Some(start) = response.find('{') {
             if let Some(end) = response.rfind('}') {
-                let json_str = &response[start..=end];
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    if let Some(min) = parsed["min_ts"].as_u64() { query.min_timestamp = Some(min); }
-                    if let Some(max) = parsed["max_ts"].as_u64() { query.max_timestamp = Some(max); }
-                    if let Some(clean) = parsed["clean_query"].as_str() { query.raw_text = clean.to_string(); }
+                if start < end {
+                    let json_str = &response[start..=end];
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        if let Some(min) = parsed["min_ts"].as_u64() { query.min_timestamp = Some(min); }
+                        if let Some(max) = parsed["max_ts"].as_u64() { query.max_timestamp = Some(max); }
+                        if let Some(clean) = parsed["clean_query"].as_str() { query.raw_text = clean.to_string(); }
+                    }
                 }
             }
         }
     }
 
-    pub fn filter_with_llm(&self, condition: &str, candidates: Vec<SearchResult>) -> Vec<SearchResult> {
+    /// Generalized Semantic Extractor
+    /// Scans the document for the densest cluster of the user's query terms and extracts a clean window of surrounding context.
+    fn extract_relevant_window(text: &str, condition: &str, window_chars: usize) -> String {
+        let lower_text = text.to_lowercase();
+        
+        // FIXED E0716: Bind to a variable to extend its lifetime before calling split_whitespace
+        let lower_cond = condition.to_lowercase();
+        let query_terms: Vec<&str> = lower_cond.split_whitespace()
+            .filter(|t| t.len() > 2) // Ignore trivial stop words to prevent false clusters
+            .collect();
+
+        if query_terms.is_empty() {
+            return text.chars().take(window_chars).collect();
+        }
+
+        let mut positions = Vec::new();
+        for term in &query_terms {
+            let mut start = 0;
+            // .find() is guaranteed to return valid char boundaries
+            while let Some(pos) = lower_text[start..].find(term) {
+                let absolute_pos = start + pos;
+                positions.push(absolute_pos);
+                start = absolute_pos + term.len();
+            }
+        }
+
+        if positions.is_empty() {
+            return text.chars().take(window_chars).collect();
+        }
+
+        // Find the densest cluster of terms within a given approximate span
+        positions.sort_unstable();
+        let mut best_byte_start = positions[0];
+        let mut max_density = 0;
+        
+        let window_bytes = window_chars * 2; 
+
+        for i in 0..positions.len() {
+            let start_pos = positions[i];
+            let end_pos = start_pos + window_bytes;
+            let mut count = 0;
+            for j in i..positions.len() {
+                if positions[j] < end_pos {
+                    count += 1;
+                } else {
+                    break;
+                }
+            }
+            if count > max_density {
+                max_density = count;
+                best_byte_start = start_pos;
+            }
+        }
+
+        // Translate safe byte boundary back to an absolute character index for multi-byte resilient slicing
+        let start_char_idx = text[..best_byte_start].chars().count();
+        let safe_start = start_char_idx.saturating_sub(60); // Provide 60 chars of leading context
+        
+        text.chars().skip(safe_start).take(window_chars).collect()
+    }
+
+    pub fn filter_with_llm(&self, condition: &str, mut candidates: Vec<SearchResult>) -> Vec<SearchResult> {
         if candidates.is_empty() { return vec![]; }
+        candidates.truncate(5);
 
         let mut docs_block = String::new();
+        
         for (i, doc) in candidates.iter().enumerate() {
             let content = doc.full_context.as_deref().unwrap_or(&doc.snippet);
-            let safe_content: String = content.chars().take(1000).collect(); 
+            let safe_content = Self::extract_relevant_window(content, condition, 400); 
             docs_block.push_str(&format!("[ID: {}]\n{}\n\n", i, safe_content));
         }
 
         let prompt = format!(
-            "<|user|>\nYou are a strict data filtering AI. \
-            Evaluate which of the following documents meet this user condition: \"{}\". \
-            Carefully extract numeric values, dates, or facts from each document to check the condition. \
-            Return ONLY a raw JSON array of the numeric IDs (e.g. [0, 2]) of the documents that strictly match the condition. \
-            If none match, return []. Do NOT include markdown formatting or explanations.\n\n\
+            "<|user|>\nDetermine which documents satisfy this condition: \"{}\". \
+            Review the following document excerpts. Return ONLY a JSON array of the matching [ID]s (e.g., [0, 2]). If none match, return [].\n\n\
             DOCUMENTS:\n{}<|end|>\n<|assistant|>\n",
             condition, docs_block
         );
@@ -211,20 +297,29 @@ impl LlmService {
         let response = self.generate_text(&prompt, 150);
 
         let mut matched_indices: Vec<usize> = Vec::new();
-        let mut search_idx = 0;
         
-        while let Some(start_offset) = response[search_idx..].find('[') {
-            let start = search_idx + start_offset;
-            if let Some(end_offset) = response[start..].find(']') {
-                let end = start + end_offset;
-                let json_str = &response[start..=end];
+        if let Some(start) = response.find('[') {
+            let mut open_brackets = 0;
+            let mut end_offset = 0;
+            let slice = &response[start..];
+            
+            for (i, c) in slice.char_indices() {
+                if c == '[' { 
+                    open_brackets += 1; 
+                } else if c == ']' { 
+                    open_brackets -= 1; 
+                    if open_brackets == 0 {
+                        end_offset = i;
+                        break;
+                    }
+                }
+            }
+            
+            if end_offset > 0 {
+                let json_str = &slice[..=end_offset];
                 if let Ok(parsed) = serde_json::from_str::<Vec<usize>>(json_str) {
                     matched_indices = parsed;
-                    break; 
                 }
-                search_idx = end + 1;
-            } else {
-                break;
             }
         }
 
@@ -234,11 +329,14 @@ impl LlmService {
             .collect()
     }
 
-    pub fn generate_synthesis(&self, query: &str, context_docs: &[SearchResult]) -> String {
+    pub fn generate_synthesis(&self, query: &str, mut context_docs: Vec<SearchResult>) -> String {
+        if context_docs.is_empty() { return "No documents found.".to_string(); }
+        context_docs.truncate(4);
+        
         let mut context_block = String::new();
         for (i, doc) in context_docs.iter().enumerate() {
             let content = doc.full_context.as_deref().unwrap_or(&doc.snippet);
-            let safe_content: String = content.chars().take(1500).collect();
+            let safe_content = Self::extract_relevant_window(content, query, 600);
             context_block.push_str(&format!("Document {}:\n{}\n\n", i + 1, safe_content));
         }
 
