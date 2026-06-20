@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.gnome-lens" path="/org/gnome/shell/extensions/gnome-lens/">
+    <key name="shortcut" type="as">
+      <default>['&lt;Super&gt;space']</default>
+      <summary>Toggle Gnome Lens shortcut</summary>
+      <description>Shortcut to toggle the Gnome Lens search bar.</description>
+    </key>
+    <key name="show-llm-animations" type="b">
+      <default>true</default>
+      <summary>Show LLM Synthesis Animations</summary>
+      <description>Show bouncing dots when the local LLM is actively synthesizing or filtering data.</description>
+    </key>
+    <key name="enable-history" type="b">
+      <default>true</default>
+      <summary>Enable Search History</summary>
+      <description>Save recent queries to display them in the tray indicator context menu.</description>
+    </key>
+    <key name="search-history" type="as">
+      <default>[]</default>
+      <summary>Saved Search History</summary>
+      <description>Internal array of the most recent searches.</description>
+    </key>
+  </schema>
+</schemalist>

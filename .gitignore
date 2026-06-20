@@ -2,3 +2,4 @@ test
 target
 .fastembed_cache
 Cargo.lock
+gnome-extension/build

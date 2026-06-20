@@ -1,0 +1,11 @@
+{
+  "name": "Gnome Lens",
+  "description": "Spotlight-alike intelligent search utilizing the local Gnome Lens Daemon.",
+  "uuid": "gnome-lens@cwittenberg",
+  "shell-version": [
+    "45",
+    "46"
+  ],
+  "settings-schema": "org.gnome.shell.extensions.gnome-lens",
+  "url": "https://github.com/cwittenberg/gnome-lens"
+}

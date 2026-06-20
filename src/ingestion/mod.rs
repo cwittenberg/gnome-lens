@@ -5,7 +5,8 @@ pub mod pdf;
 pub mod office;
 pub mod spreadsheet;
 pub mod legacy;
-pub mod image; 
+pub mod image;
+pub mod video; 
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -53,7 +54,8 @@ impl IngestionPipeline {
                 Box::new(office::ModernOfficeExtractor),
                 Box::new(spreadsheet::SpreadsheetExtractor),
                 Box::new(legacy::LegacyDocExtractor),
-                Box::new(image::ImageExtractor::new()), 
+                Box::new(image::ImageExtractor::new()),
+                Box::new(video::VideoExtractor::new()),
             ],
             domain_keywords,
         }
