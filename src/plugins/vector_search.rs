@@ -31,7 +31,7 @@ impl PluginTool for VectorSearchPlugin {
     fn name(&self) -> &'static str { "Semantic File Search" }
     
     fn can_fast_handle(&self, _query: &SearchQuery) -> bool {
-        false 
+        true // ALWAYS execute vector search to ensure files are grouped with apps
     }
     
     fn execute(&self, query: &SearchQuery) -> Vec<SearchResult> {

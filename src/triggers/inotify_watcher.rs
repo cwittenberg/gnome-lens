@@ -1,3 +1,4 @@
+// src/triggers/inotify_watcher.rs
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
@@ -11,7 +12,7 @@ pub struct INotifyTrigger;
 impl IndexTrigger for INotifyTrigger {
     fn name(&self) -> &'static str { "Kernel INotify Watcher" }
 
-    fn start(&self, target_dir: String, pipeline: Arc<IngestionPipeline>) {
+    fn start(&self, target_dirs: Vec<String>, pipeline: Arc<IngestionPipeline>) {
         thread::spawn(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             
@@ -20,8 +21,16 @@ impl IndexTrigger for INotifyTrigger {
             let mut watcher = notify::RecommendedWatcher::new(tx, notify::Config::default())
                 .expect("Failed to initialize kernel file watcher");
             
-            watcher.watch(Path::new(&target_dir), RecursiveMode::Recursive)
-                .expect("Failed to start watching target directory");
+            for dir in target_dirs {
+                if let Err(e) = watcher.watch(Path::new(&dir), RecursiveMode::Recursive) {
+                    // Graceful Degradation: If we hit fs.inotify.max_user_watches, log a warning 
+                    // and continue with the directories we successfully registered, rather than panicking.
+                    eprintln!("[INotify Warning] Could not watch directory '{}': {}", dir, e);
+                    eprintln!("  -> Hint: You may need to increase fs.inotify.max_user_watches in sysctl.conf");
+                } else {
+                    println!("  -> Kernel watching active on: {}", dir);
+                }
+            }
 
             for res in rx {
                 match res {

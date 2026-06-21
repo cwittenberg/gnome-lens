@@ -145,6 +145,26 @@ impl VectorStore {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn get_shallow_documents(&self) -> Vec<String> {
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        
+        let mut results = Vec::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT id FROM documents WHERE json_extract(metadata, '$.shallow_index') = 'true'") {
+            if let Ok(mut rows) = stmt.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    if let Ok(id) = row.get::<_, String>(0) {
+                        results.push(id);
+                    }
+                }
+            }
+        }
+        results
+    }
+
     pub fn delete_document(&self, path: &str) {
         let conn = match self.conn.lock() {
             Ok(guard) => guard,
@@ -223,7 +243,7 @@ impl VectorStore {
         let mut norm_b = 0.0;
         for (val_a, val_b) in a.iter().zip(b.iter()) {
             dot_product += val_a * val_b;
-            norm_a += val_a * val_a;
+            norm_a += val_a * val_b;
             norm_b += val_b * val_b;
         }
         if norm_a == 0.0 || norm_b == 0.0 { 0.0 } else { dot_product / (norm_a.sqrt() * norm_b.sqrt()) }
@@ -235,12 +255,18 @@ impl VectorStore {
             Err(poisoned) => poisoned.into_inner(),
         };
         
-        // 1. Prepare FTS Matches
         let mut fts_matches = HashMap::new();
         
-        // CRITICAL FIX: Natural language queries like "what was the recipe for the pie?"
-        // will fail FTS AND logic if we include stop words or punctuation.
-        let stop_words = ["what", "how", "why", "who", "when", "the", "and", "for", "with", "that", "this", "are", "you", "from", "does", "was", "is", "a", "an", "of", "in", "to"];
+        let stop_words = [
+            // Core English
+            "what", "how", "why", "who", "when", "where", "the", "and", "for", "with", "that", "this", "are", "you", "from", "does", "was", "is", "a", "an", "of", "in", "to", "on", "at", "by", "about",
+            // Conversational / File-seeking filler
+            "show", "me", "find", "search", "get", "looking", "documents", "document", "files", "file", "pictures", "picture", "photos", "photo", "saying", "something", "mentioning", "mentions", "containing", "like", "anything",
+            // Dutch
+            "wat", "hoe", "waarom", "wie", "wanneer", "de", "het", "en", "voor", "met", "dat", "dit", "zijn", "jij", "van", "doet", "was", "is", "een", "in", "naar", "op", "bij", "over", "documenten", "bestanden", "foto", "fotos",
+            // Spanish
+            "que", "como", "por", "quien", "cuando", "el", "la", "los", "las", "y", "para", "con", "eso", "esto", "son", "tu", "desde", "hace", "era", "es", "un", "una", "de", "en", "documentos", "archivos", "fotos"
+        ];
         
         let clean_query_text: String = raw_query_text.to_lowercase().chars()
             .filter(|c| c.is_alphanumeric() || *c == ' ')
@@ -335,9 +361,9 @@ impl VectorStore {
             // penalize it heavily so documents WITH the numbers bubble up.
             if contains_specifics {
                 if is_fts_match {
-                    rrf_score *= 2.0; // 2x boost for having the exact number
+                    rrf_score *= 2.0; 
                 } else {
-                    rrf_score *= 0.1; // 90% penalty for semantic guesses missing the hard values
+                    rrf_score *= 0.1; 
                 }
             }
 

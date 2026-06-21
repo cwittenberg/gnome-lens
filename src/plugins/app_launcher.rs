@@ -23,9 +23,14 @@ impl AppLauncherPlugin {
         let mut seen_execs = std::collections::HashSet::new();
 
         let home = std::env::var("HOME").unwrap_or_default();
+        
+        // Expanded to include Flatpak and Snap system installations
         let paths = vec![
             "/usr/share/applications".to_string(),
             format!("{}/.local/share/applications", home),
+            "/var/lib/flatpak/exports/share/applications".to_string(),
+            format!("{}/.local/share/flatpak/exports/share/applications", home),
+            "/var/lib/snapd/desktop/applications".to_string(),
         ];
 
         for path in paths {
@@ -92,26 +97,39 @@ impl PluginTool for AppLauncherPlugin {
     
     fn can_fast_handle(&self, query: &SearchQuery) -> bool {
         let q = query.raw_text.to_lowercase();
-        let clean_q = q.replace("open ", "").replace("launch ", "").replace("app ", "");
+        let clean_q = q.replace("open ", "").replace("launch ", "").replace("app ", "").trim().to_string();
         
         if clean_q.len() < 2 {
             return false;
         }
 
-        // Claim the fast-pass if the query matches an installed application name
-        self.apps.iter().any(|app| app.name.to_lowercase().starts_with(&clean_q))
+        // Claim the fast-pass if the query matches an installed application name, id, or exec
+        self.apps.iter().any(|app| {
+            app.name.to_lowercase().contains(&clean_q) || 
+            app.id.to_lowercase().contains(&clean_q) ||
+            app.exec.to_lowercase().contains(&clean_q)
+        })
     }
     
     fn execute(&self, query: &SearchQuery) -> Vec<SearchResult> {
         let q = query.raw_text.to_lowercase();
-        let clean_q = q.replace("open ", "").replace("launch ", "").replace("app ", "");
+        let clean_q = q.replace("open ", "").replace("launch ", "").replace("app ", "").trim().to_string();
         
         let mut matches: Vec<_> = self.apps.iter()
-            .filter(|app| app.name.to_lowercase().contains(&clean_q))
+            .filter(|app| {
+                app.name.to_lowercase().contains(&clean_q) || 
+                app.id.to_lowercase().contains(&clean_q) ||
+                app.exec.to_lowercase().contains(&clean_q)
+            })
             .collect();
 
         // Sort so exact/prefix matches bubble to the top of the fast-pass payload
         matches.sort_by(|a, b| {
+            let a_exact = a.name.to_lowercase() == clean_q;
+            let b_exact = b.name.to_lowercase() == clean_q;
+            if a_exact && !b_exact { return std::cmp::Ordering::Less; }
+            if !a_exact && b_exact { return std::cmp::Ordering::Greater; }
+
             let a_starts = a.name.to_lowercase().starts_with(&clean_q);
             let b_starts = b.name.to_lowercase().starts_with(&clean_q);
             match (a_starts, b_starts) {

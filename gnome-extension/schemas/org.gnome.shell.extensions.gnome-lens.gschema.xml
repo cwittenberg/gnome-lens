@@ -21,5 +21,21 @@
       <summary>Saved Search History</summary>
       <description>Internal array of the most recent searches.</description>
     </key>
+
+    <key name="index-full-system" type="b">
+      <default>false</default>
+      <summary>Index entire home directory</summary>
+      <description>Whether to recursively index the entire home directory.</description>
+    </key>
+    <key name="index-paths" type="as">
+      <default>['~/Documents', '~/Downloads', '~/Desktop', '~/Pictures', '~/Videos']</default>
+      <summary>Custom target index paths</summary>
+      <description>Specific directories to index if full system is disabled.</description>
+    </key>
+    <key name="index-blacklist" type="as">
+      <default>['.git', 'node_modules', 'target', '.cache', '.cargo', '.rustup', '.npm', '.local/share/Trash', '__pycache__', 'venv', '.idea', '.vscode']</default>
+      <summary>Blacklisted folder names</summary>
+      <description>Folder or file names that will be skipped during recursive index sweeps.</description>
+    </key>
   </schema>
 </schemalist>

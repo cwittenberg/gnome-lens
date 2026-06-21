@@ -1,3 +1,4 @@
+// gnome-extension/ui.js
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
@@ -114,7 +115,7 @@ export const GnomeLensUI = GObject.registerClass({
         this._dialog.add_child(this._searchBar);
 
         this._resultsList = new GnomeLensResultsList({
-            onLaunch: (result) => this._launchResult(result)
+            onLaunch: (result, action) => this._launchResult(result, action)
         });
         this._dialog.add_child(this._resultsList);
 
@@ -328,27 +329,52 @@ export const GnomeLensUI = GObject.registerClass({
         }
     }
 
-    _launchResult(result) {
+    _launchResult(result, action = 'open') {
         this._extension.saveHistory(this._searchBar.getQuery());
 
-        let uri = null;
-        if (result.filepath) {
-            let file = Gio.File.new_for_path(result.filepath);
-            uri = file.get_uri();
-        }
-
         this.close(true);
-        if (!uri) return;
+
+        if (!result.filepath) return;
 
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             let launchContext = global.create_app_launch_context(0, -1);
-            Gio.AppInfo.launch_default_for_uri_async(uri, launchContext, null, (_source, res) => {
-                try {
-                    Gio.AppInfo.launch_default_for_uri_finish(res);
-                } catch (error) {
-                    console.warn(`[Gnome Lens] Failed to launch result ${uri}: ${error}`);
+
+            if (action === 'open' && result.filepath.endsWith('.desktop')) {
+                let appInfo = Gio.DesktopAppInfo.new_from_filename(result.filepath);
+                if (appInfo) {
+                    try {
+                        appInfo.launch([], launchContext);
+                    } catch (error) {
+                        console.warn(`[Gnome Lens] Failed to launch app: ${error}`);
+                    }
+                    return GLib.SOURCE_REMOVE;
                 }
-            });
+            }
+
+            let uri = null;
+            let file = Gio.File.new_for_path(result.filepath);
+
+            if (action === 'folder') {
+                let parent = file.get_parent();
+                if (parent) {
+                    uri = parent.get_uri();
+                } else {
+                    uri = file.get_uri();
+                }
+            } else {
+                uri = file.get_uri();
+            }
+
+            if (uri) {
+                Gio.AppInfo.launch_default_for_uri_async(uri, launchContext, null, (_source, res) => {
+                    try {
+                        Gio.AppInfo.launch_default_for_uri_finish(res);
+                    } catch (error) {
+                        console.warn(`[Gnome Lens] Failed to launch result ${uri}: ${error}`);
+                    }
+                });
+            }
+
             return GLib.SOURCE_REMOVE;
         });
     }

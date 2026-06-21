@@ -30,10 +30,11 @@ pub struct IngestionPipeline {
     ai_model: Mutex<TextEmbedding>,
     extractors: Vec<Box<dyn FileExtractor>>,
     domain_keywords: HashMap<String, Vec<String>>,
+    blacklist: Vec<String>,
 }
 
 impl IngestionPipeline {
-    pub fn new(store: Arc<VectorStore>, config_dir: &str) -> Self {
+    pub fn new(store: Arc<VectorStore>, config_dir: &str, blacklist: Vec<String>) -> Self {
         let mut options = InitOptions::default();
         options.model_name = EmbeddingModel::ParaphraseMLMiniLML12V2;
         options.show_download_progress = true;
@@ -58,6 +59,7 @@ impl IngestionPipeline {
                 Box::new(video::VideoExtractor::new()),
             ],
             domain_keywords,
+            blacklist,
         }
     }
 
@@ -85,7 +87,6 @@ impl IngestionPipeline {
 
     fn extract_entities(&self, content: &str, file_ext: &str) -> HashMap<String, String> {
         let mut metadata = HashMap::new();
-        
         metadata.insert("filetype".to_string(), file_ext.to_string());
 
         let tokens: Vec<String> = content
@@ -119,8 +120,6 @@ impl IngestionPipeline {
         metadata
     }
 
-    /// Intelligently truncates a document by prioritizing the Head, the Tail, 
-    /// and the most keyword-dense middle paragraphs up to a specific byte limit.
     fn smart_truncate(&self, content: &str, max_bytes: usize) -> String {
         if content.len() <= max_bytes {
             return content.to_string();
@@ -128,18 +127,14 @@ impl IngestionPipeline {
 
         let paragraphs: Vec<&str> = content.split("\n\n").collect();
         if paragraphs.is_empty() {
-            // Fallback for documents without double newlines
             let mut end = max_bytes;
-            while !content.is_char_boundary(end) {
-                end -= 1;
-            }
+            while !content.is_char_boundary(end) { end -= 1; }
             return content[..end].to_string();
         }
 
         let mut total_bytes = 0;
         let mut selected_indices = HashSet::new();
 
-        // 1. Take Head (up to 20% of max_bytes)
         let head_limit = max_bytes / 5;
         let mut head_bytes = 0;
         for (i, p) in paragraphs.iter().enumerate() {
@@ -150,7 +145,6 @@ impl IngestionPipeline {
             total_bytes += p_len;
         }
 
-        // 2. Take Tail (up to 20% of max_bytes)
         let tail_limit = max_bytes / 5;
         let mut tail_bytes = 0;
         for i in (0..paragraphs.len()).rev() {
@@ -162,7 +156,6 @@ impl IngestionPipeline {
             total_bytes += p_len;
         }
 
-        // 3. Score the remaining middle paragraphs
         let mut middle_scored: Vec<(usize, usize, usize)> = Vec::new();
         for (i, p) in paragraphs.iter().enumerate() {
             if selected_indices.contains(&i) { continue; }
@@ -171,39 +164,29 @@ impl IngestionPipeline {
             let lower_p = p.to_lowercase();
             
             for word in p.split_whitespace() {
-                // Heavily weight numbers and proper nouns (capitalized words)
                 if word.chars().any(|c| c.is_ascii_digit()) { score += 2; }
                 if word.chars().next().map_or(false, |c| c.is_uppercase()) { score += 1; }
             }
             
-            // Apply domain keyword boosts
             for (_, keywords) in &self.domain_keywords {
                 for kw in keywords {
-                    if lower_p.contains(kw) {
-                        score += 5;
-                    }
+                    if lower_p.contains(kw) { score += 5; }
                 }
             }
             
-            // Normalize score to favor dense short paragraphs over long rambling ones
             let normalized_score = if !p.is_empty() { (score * 1000) / p.len() } else { 0 };
             middle_scored.push((i, p.len(), normalized_score));
         }
 
-        // Sort middle paragraphs descending by information density
         middle_scored.sort_by(|a, b| b.2.cmp(&a.2));
 
-        // 4. Fill the remaining space with the highest scoring paragraphs
         for (i, len, _) in middle_scored {
-            if total_bytes + len > max_bytes {
-                continue; 
-            }
+            if total_bytes + len > max_bytes { continue; }
             selected_indices.insert(i);
             total_bytes += len;
-            if total_bytes >= max_bytes - 1000 { break; } // Margin of error
+            if total_bytes >= max_bytes - 1000 { break; }
         }
 
-        // 5. Reassemble in chronological order
         let mut final_indices: Vec<usize> = selected_indices.into_iter().collect();
         final_indices.sort_unstable();
 
@@ -213,12 +196,9 @@ impl IngestionPipeline {
             result.push_str("\n\n");
         }
         
-        // Failsafe boundary check
         if result.len() > max_bytes {
             let mut end = max_bytes;
-            while !result.is_char_boundary(end) {
-                end -= 1;
-            }
+            while !result.is_char_boundary(end) { end -= 1; }
             result.truncate(end);
         }
 
@@ -252,61 +232,86 @@ impl IngestionPipeline {
         }
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("unknown").to_lowercase();
 
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if let Some(extractor) = self.extractors.iter().find(|e| e.can_handle(&ext.to_lowercase())) {
-                if let Ok(content) = extractor.extract(path) {
-                    
-                    // Route through the new intelligent truncation heuristic
-                    let content = self.smart_truncate(&content, MAX_DOC_BYTES);
+        let (content, is_shallow) = if let Some(extractor) = self.extractors.iter().find(|e| e.can_handle(&ext)) {
+            match extractor.extract(path) {
+                Ok(extracted_text) => (self.smart_truncate(&extracted_text, MAX_DOC_BYTES), false),
+                Err(_) => (String::new(), true),
+            }
+        } else {
+            (String::new(), true)
+        };
 
-                    let mut metadata = self.extract_entities(&content, ext);
-                    
-                    metadata.insert("created_at".to_string(), modified_at.to_string());
-                    metadata.insert("indexed_at".to_string(), now.to_string());
+        let mut metadata = self.extract_entities(&content, &ext);
+        metadata.insert("created_at".to_string(), modified_at.to_string());
+        metadata.insert("indexed_at".to_string(), now.to_string());
+        metadata.insert("shallow_index".to_string(), is_shallow.to_string());
 
-                    let safe_content = content.chars().take(8000).collect::<String>();
-                    
-                    let vector_option = {
-                        let mut model = self.ai_model.lock().unwrap();
-                        match model.embed(vec![safe_content], None) {
-                            Ok(mut embeddings) => embeddings.pop(),
-                            Err(_) => None,
-                        }
-                    };
+        let vector_option = if is_shallow {
+            Some(vec![0.0; 384])
+        } else {
+            let safe_content = content.chars().take(8000).collect::<String>();
+            let mut model = self.ai_model.lock().unwrap();
+            match model.embed(vec![safe_content], None) {
+                Ok(mut embeddings) => embeddings.pop(),
+                Err(_) => None,
+            }
+        };
 
-                    if let Some(vector) = vector_option {
-                        self.store.insert_document(
-                            path_str,
-                            content, 
-                            vector,
-                            modified_at,
-                            metadata
-                        );
-                        println!("[Indexer] Processed: {:?}", path.file_name().unwrap_or_default());
-                    }
-                } else {
-                    eprintln!("[Indexer] Failed to extract text from: {:?}", path.file_name().unwrap_or_default());
-                }
+        if let Some(vector) = vector_option {
+            self.store.insert_document(
+                path_str,
+                content, 
+                vector,
+                modified_at,
+                metadata
+            );
+            if is_shallow {
+                println!("[Indexer] Shallow Tracked: {:?}", path.file_name().unwrap_or_default());
+            } else {
+                println!("[Indexer] Deep Processed: {:?}", path.file_name().unwrap_or_default());
             }
         }
     }
 
-    pub fn run_indexer(&self, target_dir: &str) {
-        println!("Starting Multi-lingual AI ingestion sweep on: {}", target_dir);
-        
-        let mut entries = Vec::new();
-        for entry in WalkDir::new(target_dir).into_iter() {
-            match entry {
-                Ok(e) => entries.push(e),
-                Err(err) => eprintln!("[Indexer] Directory traversal error: {}", err),
+    fn is_ignored_directory(&self, name: &str) -> bool {
+        name.starts_with('.') || self.blacklist.contains(&name.to_string())
+    }
+
+    pub fn run_indexer(&self, target_dirs: Vec<String>) {
+        for target_dir in target_dirs {
+            println!("Starting indexer pass on: {}", target_dir);
+            
+            let mut entries = Vec::new();
+            
+            for entry in WalkDir::new(&target_dir)
+                .into_iter()
+                .filter_entry(|e| {
+                    let fname = e.file_name().to_string_lossy();
+                    !self.is_ignored_directory(&fname)
+                }) 
+            {
+                match entry {
+                    Ok(e) => {
+                        if e.file_type().is_file() {
+                            entries.push(e);
+                        }
+                    },
+                    Err(err) => {
+                        let is_permission_denied = err.io_error().map_or(false, |io| io.kind() == std::io::ErrorKind::PermissionDenied);
+                        if !is_permission_denied {
+                            eprintln!("[Indexer] Directory traversal error in {}: {}", target_dir, err);
+                        }
+                    }
+                }
             }
+            
+            entries.par_iter().for_each(|entry| {
+                self.index_file(entry.path());
+            });
         }
         
-        entries.par_iter().for_each(|entry| {
-            self.index_file(entry.path());
-        });
-        
-        println!("Ingestion sweep complete.");
+        println!("Full Ingestion sweep complete.");
     }
 }

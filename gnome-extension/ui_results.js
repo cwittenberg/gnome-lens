@@ -1,3 +1,4 @@
+// gnome-extension/ui_results.js
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
@@ -108,6 +109,13 @@ class GnomeLensResultsList extends St.ScrollView {
             widget.destroy();
         }
         this._resultWidgets = [];
+        
+        let children = this._resultsBox.get_children();
+        for (let child of children) {
+            if (child.has_style_class_name('lens-result-group-header')) {
+                child.destroy();
+            }
+        }
     }
 
     _fetchThumbnailAsync(filepath, iconActor, fallbackIconName) {
@@ -146,17 +154,46 @@ class GnomeLensResultsList extends St.ScrollView {
 
         this.clear();
         
+        // Advanced Grouping and Sorting Pipeline
         this._results = [...resultsArray].sort((a, b) => {
             let aMatch = a.ai_matched !== false;
             let bMatch = b.ai_matched !== false;
-            if (aMatch === bMatch) return 0;
-            return aMatch ? -1 : 1;
+            if (aMatch !== bMatch) return aMatch ? -1 : 1;
+
+            let getGroup = (r) => {
+                if (r.plugin_id === 'plugin:app_launcher' || r.plugin_id === 'plugin:math') return 0;
+                if (r.metadata && r.metadata.shallow_index === 'true') return 2;
+                return 1;
+            };
+            
+            let groupA = getGroup(a);
+            let groupB = getGroup(b);
+            
+            if (groupA !== groupB) return groupA - groupB;
+            
+            return b.score - a.score;
         });
 
         let maxRender = Math.min(this._results.length, 30);
+        let currentGroup = -1;
+        let groupNames = ["Applications & Tools", "Indexed Documents", "Other Files"];
 
         for (let i = 0; i < maxRender; i++) {
             let res = this._results[i];
+            
+            let group = 1;
+            if (res.plugin_id === 'plugin:app_launcher' || res.plugin_id === 'plugin:math') group = 0;
+            else if (res.metadata && res.metadata.shallow_index === 'true') group = 2;
+            
+            if (group !== currentGroup) {
+                let header = new St.Label({
+                    text: groupNames[group],
+                    style_class: 'lens-result-group-header'
+                });
+                this._resultsBox.add_child(header);
+                currentGroup = group;
+            }
+
             let itemBox = new St.BoxLayout({
                 style_class: 'lens-result-item',
                 vertical: false,
@@ -215,6 +252,7 @@ class GnomeLensResultsList extends St.ScrollView {
 
             if (res.plugin_id === 'plugin:email') iconName = 'mail-unread-symbolic';
             if (res.plugin_id === 'plugin:math') iconName = 'accessories-calculator-symbolic';
+            if (res.plugin_id === 'plugin:app_launcher') iconName = 'application-x-executable-symbolic';
 
             let iconActor = new St.Icon({
                 icon_name: iconName,

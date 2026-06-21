@@ -91,7 +91,6 @@ impl SystemRouter {
                 if let Some(key) = json["key"].as_str() {
                     let value = &json["value"];
                     
-                    // Route to specific managers based on the configuration key
                     if key == "active_model" {
                         if let Some(model_id) = value.as_str() {
                             send_chunk(serde_json::json!({"status": "processing", "message": "Initiating model switch..."}).to_string());
@@ -116,9 +115,9 @@ impl SystemRouter {
                 return;
             }
             
+            // ACTION: App Launcher
             if json["action"].as_str() == Some("launch_app") {
                 if let Some(exec) = json["exec"].as_str() {
-                    // Standard desktop entry exec parameter cleanup
                     let clean_exec = exec.replace("%u", "")
                         .replace("%U", "")
                         .replace("%f", "")
@@ -129,7 +128,6 @@ impl SystemRouter {
                     if let Some(cmd) = parts.next() {
                         let args: Vec<&str> = parts.collect();
                         
-                        // Spawn detached so we don't hold up the daemon process loop
                         let spawn_res = std::process::Command::new(cmd)
                             .args(args)
                             .stdin(std::process::Stdio::null())
@@ -150,6 +148,34 @@ impl SystemRouter {
                                     "message": format!("Failed to launch: {}", e)
                                 }).to_string());
                             }
+                        }
+                    }
+                }
+                return;
+            }
+
+            // ACTION: Universal File Launcher (mlocate integration)
+            if json["action"].as_str() == Some("open_file") {
+                if let Some(path) = json["path"].as_str() {
+                    let spawn_res = std::process::Command::new("xdg-open")
+                        .arg(path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+
+                    match spawn_res {
+                        Ok(_) => {
+                            send_chunk(serde_json::json!({
+                                "status": "done",
+                                "message": "File opened via native OS handler."
+                            }).to_string());
+                        },
+                        Err(e) => {
+                            send_chunk(serde_json::json!({
+                                "status": "error",
+                                "message": format!("Failed to open file: {}", e)
+                            }).to_string());
                         }
                     }
                 }
@@ -219,21 +245,14 @@ impl SystemRouter {
         // =====================================================================
         let fp_start = Instant::now();
         let mut fast_results = Vec::new();
-        let mut handled = false;
 
+        // Run ALL applicable plugins and collect results to enable UI grouping
         for plugin in &self.plugins {
             if plugin.can_fast_handle(&search_query) {
-                fast_results = plugin.execute(&search_query);
-                handled = true;
-                break;
+                fast_results.extend(plugin.execute(&search_query));
             }
         }
 
-        if !handled {
-            if let Some(vector_plugin) = self.plugins.iter().find(|p| p.id() == "plugin:vector_db") {
-                fast_results = vector_plugin.execute(&search_query);
-            }
-        }
         println!("[Router DEBUG] Plugins & Vector Search took: {:.2?}", fp_start.elapsed());
 
         // Strip the payload context before piping to the socket to prevent IPC bloat
@@ -255,7 +274,6 @@ impl SystemRouter {
         // =====================================================================
         let intent_start = Instant::now();
         
-        // Gated by the fast lexical pre-filter in llm.rs to guarantee <1ms execution on standard queries
         let intent = self.llm.determine_intent(&search_query.raw_text, search_query.is_synthesis_request, Arc::clone(&is_cancelled));
         
         println!("[Router DEBUG] LLM intent determination took: {:.2?}", intent_start.elapsed());
@@ -293,7 +311,7 @@ impl SystemRouter {
             },
 
             LlmIntent::RefineSearch => {
-                send_chunk(serde_json::json!({"status": "processing", "message": "Applying temporal boundaries..."}).to_string());
+                send_chunk(serde_json::json!({"status": "processing", "message": "Applying semantic boundaries..."}).to_string());
                 
                 self.llm.apply_temporal_heuristics(&mut search_query, Arc::clone(&is_cancelled));
                 let mut llm_results = Vec::new();
@@ -304,7 +322,13 @@ impl SystemRouter {
                 // Deduplicate results that were already in the fast pass
                 llm_results.retain(|res| !partial_payload.iter().any(|fast_res| fast_res.id == res.id));
 
-                let final_payload: Vec<_> = llm_results.into_iter().map(|mut r| {
+                // COMBINE FAST PASS RESULTS WITH NEW LLM ENHANCED RESULTS
+                // By not combining them, the fast pass results (which often contain the best hits) 
+                // were being lost entirely!
+                let mut combined_results = fast_results;
+                combined_results.extend(llm_results);
+
+                let final_payload: Vec<_> = combined_results.into_iter().map(|mut r| {
                     r.full_context = None;
                     r
                 }).collect();
@@ -320,7 +344,6 @@ impl SystemRouter {
             LlmIntent::SynthesizeAnswer => {
                 send_chunk(serde_json::json!({"status": "synthesizing", "message": "Reading documents..."}).to_string());
                 
-                // Passed `.clone()` so it takes an owned Vec without killing the fast_results variable
                 let answer_json = self.llm.generate_synthesis(&search_query.raw_text, fast_results.clone(), Arc::clone(&is_cancelled));
                 
                 let final_payload: Vec<_> = fast_results.into_iter().map(|mut r| {

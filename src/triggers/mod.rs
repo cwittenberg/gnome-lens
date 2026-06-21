@@ -1,3 +1,4 @@
+// src/triggers/mod.rs
 pub mod inotify_watcher;
 
 // Re-export the trigger so it can be cleanly imported from crate::triggers
@@ -10,7 +11,7 @@ use crate::ingestion::IngestionPipeline;
 pub trait IndexTrigger: Send + Sync {
     fn name(&self) -> &'static str;
     
-    /// Binds the trigger to a directory and gives it a thread-safe reference 
+    /// Binds the trigger to multiple directories and gives it a thread-safe reference 
     /// to the AI ingestion pipeline.
-    fn start(&self, target_dir: String, pipeline: Arc<IngestionPipeline>);
+    fn start(&self, target_dirs: Vec<String>, pipeline: Arc<IngestionPipeline>);
 }
