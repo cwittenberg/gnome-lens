@@ -80,6 +80,15 @@ export default class DaemonClient {
     }
 
     cancel() {
+        // Guarantee immediate background cancellation by writing 
+        // to the active stream before tearing the connection down.
+        if (this._outputStream) {
+            try {
+                let payload = JSON.stringify({ action: 'cancel' }) + '\n';
+                this._outputStream.write_all(payload, null);
+            } catch(e) {}
+        }
+
         if (this._cancellable) {
             this._cancellable.cancel();
             this._cancellable = null;

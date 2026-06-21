@@ -1,6 +1,7 @@
 // src/engine/router.rs
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use crate::domain::SearchQuery;
@@ -38,7 +39,7 @@ impl SystemRouter {
         HashMap::new() 
     }
 
-    pub fn handle_request<F>(&self, request_payload: &str, mut send_chunk: F)
+    pub fn handle_request<F>(&self, request_payload: &str, is_cancelled: Arc<AtomicBool>, mut send_chunk: F)
     where
         F: FnMut(String),
     {
@@ -198,7 +199,7 @@ impl SystemRouter {
         let intent_start = Instant::now();
         
         // Gated by the fast lexical pre-filter in llm.rs to guarantee <1ms execution on standard queries
-        let intent = self.llm.determine_intent(&search_query.raw_text, search_query.is_synthesis_request);
+        let intent = self.llm.determine_intent(&search_query.raw_text, search_query.is_synthesis_request, Arc::clone(&is_cancelled));
         
         println!("[Router DEBUG] LLM intent determination took: {:.2?}", intent_start.elapsed());
 
@@ -212,8 +213,15 @@ impl SystemRouter {
             LlmIntent::FilterResults => {
                 send_chunk(serde_json::json!({"status": "filtering", "message": "Evaluating documents against condition..."}).to_string());
                 
-                let filtered = self.llm.filter_with_llm(&search_query.raw_text, fast_results);
+                let mut filtered = self.llm.filter_with_llm(&search_query.raw_text, fast_results, Arc::clone(&is_cancelled));
                 
+                // Sort so that AI matches rank highest, followed by false or un-evaluated matches
+                filtered.sort_by(|a, b| {
+                    let a_match = a.ai_matched.unwrap_or(false);
+                    let b_match = b.ai_matched.unwrap_or(false);
+                    b_match.cmp(&a_match) 
+                });
+
                 let final_payload: Vec<_> = filtered.into_iter().map(|mut r| {
                     r.full_context = None;
                     r
@@ -230,7 +238,7 @@ impl SystemRouter {
             LlmIntent::RefineSearch => {
                 send_chunk(serde_json::json!({"status": "processing", "message": "Applying temporal boundaries..."}).to_string());
                 
-                self.llm.apply_temporal_heuristics(&mut search_query);
+                self.llm.apply_temporal_heuristics(&mut search_query, Arc::clone(&is_cancelled));
                 let mut llm_results = Vec::new();
                 if let Some(vector_plugin) = self.plugins.iter().find(|p| p.id() == "plugin:vector_db") {
                     llm_results = vector_plugin.execute(&search_query);
@@ -256,7 +264,7 @@ impl SystemRouter {
                 send_chunk(serde_json::json!({"status": "synthesizing", "message": "Reading documents..."}).to_string());
                 
                 // Passed `.clone()` so it takes an owned Vec without killing the fast_results variable
-                let answer = self.llm.generate_synthesis(&search_query.raw_text, fast_results.clone());
+                let answer_json = self.llm.generate_synthesis(&search_query.raw_text, fast_results.clone(), Arc::clone(&is_cancelled));
                 
                 let final_payload: Vec<_> = fast_results.into_iter().map(|mut r| {
                     r.full_context = None;
@@ -266,7 +274,7 @@ impl SystemRouter {
                 send_chunk(serde_json::json!({
                     "status": "final",
                     "mode": "rag_synthesis",
-                    "synthesis_text": answer.trim(),
+                    "synthesis_result": answer_json,
                     "results": final_payload
                 }).to_string());
                 println!("[Router DEBUG] SynthesizeAnswer Intent finished in {:.2?}", phase_start.elapsed());

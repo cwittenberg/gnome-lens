@@ -12,6 +12,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::env;
 use std::thread;
 use std::time::Instant;
@@ -28,6 +29,33 @@ fn handle_client(mut stream: UnixStream, router: Arc<SystemRouter>) {
         if bytes_read > 0 {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
             
+            // If the initial connection is purely a cancel command, ignore it
+            if request.contains("\"cancel\"") {
+                return;
+            }
+
+            let is_cancelled = Arc::new(AtomicBool::new(false));
+            let cancel_flag = Arc::clone(&is_cancelled);
+            
+            // Spawn a detached thread to actively listen on the stream for early cancellation
+            if let Ok(mut stream_clone) = stream.try_clone() {
+                thread::spawn(move || {
+                    let mut buf = [0; 128];
+                    while let Ok(n) = stream_clone.read(&mut buf) {
+                        if n == 0 {
+                            // Client disconnected
+                            cancel_flag.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                        if String::from_utf8_lossy(&buf[..n]).contains("\"cancel\"") {
+                            // Client sent explicit cancel command
+                            cancel_flag.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                    }
+                });
+            }
+            
             let start_time = Instant::now();
             
             // Prevent visual confusion in the logs by distinguishing 
@@ -38,14 +66,14 @@ fn handle_client(mut stream: UnixStream, router: Arc<SystemRouter>) {
                 println!("[Daemon] Received Search Query: {}", request.trim());
             }
             
-            router.handle_request(&request, |chunk| {
+            router.handle_request(&request, is_cancelled, |chunk| {
                 let mut payload = chunk.clone();
                 payload.push('\n'); 
                 let _ = stream.write_all(payload.as_bytes());
                 let _ = stream.flush(); 
             });
 
-            println!("[Daemon] Finished streaming response in {:.2?}", start_time.elapsed());
+            println!("[Daemon] Finished processing stream in {:.2?}", start_time.elapsed());
         }
     }
 }

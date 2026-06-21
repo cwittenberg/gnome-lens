@@ -1,3 +1,4 @@
+// gnome-extension/build/ui.js
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
@@ -66,7 +67,7 @@ export const GnomeLensUI = GObject.registerClass({
             onClear: () => {
                 this._daemon.cancel();
                 this._resultsList.clear();
-                this._synthesis.setSynthesis('');
+                this._synthesis.setSynthesis(null);
                 this._status.stopAnimation();
                 this._status.setStatus('');
                 this._searchBar.stopPulse();
@@ -373,8 +374,8 @@ export const GnomeLensUI = GObject.registerClass({
                     if (data.results.length > 0) {
                         this._updatePosition(true, true);
                     }
-                    if (data.mode === 'rag_synthesis' && data.synthesis_text) {
-                        this._synthesis.setSynthesis(data.synthesis_text);
+                    if (data.mode === 'rag_synthesis' && data.synthesis_result) {
+                        this._synthesis.setSynthesis(data.synthesis_result);
                     }
                 }
             },

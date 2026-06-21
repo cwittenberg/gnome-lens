@@ -75,15 +75,16 @@ class GnomeLensResultsList extends St.ScrollView {
             let widget = this._resultWidgets[this._selectedIndex];
             widget.add_style_class_name('selected');
 
-            let adjustment = this.vscroll.adjustment;
-            let [val, lower, upper, step, page, size] = adjustment.get_values();
+            let adjustment = this.vadjustment;
+            let val = adjustment.value;
+            let pageSize = adjustment.page_size;
             let y = widget.allocation.y1;
             let height = widget.allocation.y2 - widget.allocation.y1;
 
             if (y < val) {
                 adjustment.set_value(y);
-            } else if (y + height > val + page) {
-                adjustment.set_value(y + height - page);
+            } else if (y + height > val + pageSize) {
+                adjustment.set_value(y + height - pageSize);
             }
         }
     }
@@ -129,8 +130,6 @@ class GnomeLensResultsList extends St.ScrollView {
     }
 
     renderResults(resultsArray) {
-        // Cache the currently selected ID to prevent sticky cursor jumping 
-        // when background LLM filtering yields a dynamic refresh.
         let oldSelectedId = null;
         if (this._selectedIndex >= 0 && this._selectedIndex < this._results.length) {
             oldSelectedId = this._results[this._selectedIndex].id;
@@ -150,6 +149,10 @@ class GnomeLensResultsList extends St.ScrollView {
                 reactive: true,
             });
 
+            if (res.ai_matched === false) {
+                itemBox.add_style_class_name('irrelevant');
+            }
+
             itemBox.connectObject('button-press-event', () => {
                 if (this.callbacks.onLaunch) this.callbacks.onLaunch(res);
                 return Clutter.EVENT_STOP;
@@ -157,7 +160,8 @@ class GnomeLensResultsList extends St.ScrollView {
 
             let handlePointerEvent = () => {
                 let [x, y] = global.get_pointer();
-                if (this._lastPointerX !== x || this._lastPointerY !== y) {
+                
+                if (Math.abs(this._lastPointerX - x) > 1 || Math.abs(this._lastPointerY - y) > 1) {
                     this._lastPointerX = x;
                     this._lastPointerY = y;
                     if (this._selectedIndex !== i) {
@@ -221,6 +225,16 @@ class GnomeLensResultsList extends St.ScrollView {
                     style_class: 'lens-result-snippet',
                 });
                 textBox.add_child(snippet);
+            }
+
+            if (res.ai_reasoning) {
+                let reasoningPrefix = res.ai_matched ? '✅ ' : '❌ ';
+                let reasoningLabel = new St.Label({
+                    text: reasoningPrefix + res.ai_reasoning,
+                    style_class: 'lens-result-ai-reasoning',
+                });
+                reasoningLabel.clutter_text.line_wrap = true;
+                textBox.add_child(reasoningLabel);
             }
 
             itemBox.add_child(textBox);

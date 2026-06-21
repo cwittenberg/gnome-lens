@@ -15,6 +15,8 @@ pub struct SearchResult {
     pub created_at: Option<u64>,
     pub indexed_at: Option<u64>,
     pub full_context: Option<String>,
+    pub ai_matched: Option<bool>,
+    pub ai_reasoning: Option<String>,
 }
 
 #[derive(Clone, Default, Debug)]

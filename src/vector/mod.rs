@@ -385,6 +385,8 @@ impl VectorStore {
                 created_at,
                 indexed_at,
                 full_context: Some(full_text.chars().take(2500).collect::<String>()),
+                ai_matched: None,
+                ai_reasoning: None,
             });
         }
 

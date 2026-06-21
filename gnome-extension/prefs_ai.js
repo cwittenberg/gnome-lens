@@ -23,7 +23,8 @@ class AIEngineManager {
         
         this.spinner = new Gtk.Spinner({
             valign: Gtk.Align.CENTER,
-            margin_end: 12
+            margin_end: 12,
+            visible: false
         });
         this.statusRow.add_prefix(this.spinner);
         
@@ -76,6 +77,7 @@ class AIEngineManager {
                     this.statusRow.set_subtitle('Is the rust background service running?');
                     this.hwStatusRow.set_subtitle('Daemon unreachable.');
                     this.spinner.stop();
+                    this.spinner.set_visible(false);
                 }
             }
         });
@@ -117,12 +119,14 @@ class AIEngineManager {
     }
 
     requestConfig() {
+        this.spinner.set_visible(true);
         this.spinner.start();
         this.statusRow.set_subtitle('Synchronizing...');
         
         this._sendPayload({ action: 'get_config' }, (data) => {
             if (data.status === 'config_data') {
                 this.spinner.stop();
+                this.spinner.set_visible(false);
                 this.statusRow.set_subtitle('Ready for integration.');
                 this._renderModels(data.data);
             }
@@ -149,6 +153,7 @@ class AIEngineManager {
             btn.set_sensitive(false);
         }
         
+        this.spinner.set_visible(true);
         this.spinner.start();
         this.statusRow.set_title('⚙️ Executing Model Hotswap...');
         this.statusRow.set_subtitle('This may take several minutes if a download is required. Do not close this window.');
@@ -162,6 +167,7 @@ class AIEngineManager {
                 this.requestConfig();
             } else if (data.status === 'error') {
                 this.spinner.stop();
+                this.spinner.set_visible(false);
                 this.statusRow.set_title('🔴 Engine Error');
                 this.statusRow.set_subtitle(data.message);
                 this.requestConfig();

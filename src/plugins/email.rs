@@ -30,6 +30,8 @@ impl PluginTool for EmailPlugin {
                 created_at: None,
                 indexed_at: None,
                 full_context: None,
+                ai_matched: None,
+                ai_reasoning: None,
             });
         }
         results

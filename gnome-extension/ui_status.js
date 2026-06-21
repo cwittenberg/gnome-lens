@@ -1,26 +1,70 @@
+// gnome-extension/ui_status.js
 import GLib from 'gi://GLib';
 import St from 'gi://St';
+import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 
 export const GnomeLensSynthesis = GObject.registerClass(
 class GnomeLensSynthesis extends St.BoxLayout {
     _init() {
-        super._init({ vertical: true, x_expand: true, visible: false });
-        this._synthesisLabel = new St.Label({
-            style_class: 'lens-synthesis-text',
+        super._init({ vertical: true, x_expand: true, visible: false, style_class: 'lens-synthesis-container' });
+        
+        this._headerBox = new St.BoxLayout({ vertical: false, x_expand: true });
+        
+        this._confidenceBadge = new St.Label({
+            style_class: 'lens-synthesis-badge',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._headerBox.add_child(this._confidenceBadge);
+        this.add_child(this._headerBox);
+
+        this._answerLabel = new St.Label({
+            style_class: 'lens-synthesis-answer',
             x_expand: true,
         });
-        this._synthesisLabel.clutter_text.line_wrap = true;
-        this.add_child(this._synthesisLabel);
+        this._answerLabel.clutter_text.line_wrap = true;
+        this.add_child(this._answerLabel);
+        
+        this._reasoningLabel = new St.Label({
+            style_class: 'lens-synthesis-reasoning',
+            x_expand: true,
+        });
+        this._reasoningLabel.clutter_text.line_wrap = true;
+        this.add_child(this._reasoningLabel);
     }
 
-    setSynthesis(text) {
-        if (!text) {
+    setSynthesis(resultObj) {
+        if (!resultObj) {
             this.hide();
-            this._synthesisLabel.set_text('');
             return;
         }
-        this._synthesisLabel.set_text(text);
+        
+        if (typeof resultObj === 'string') {
+            this._answerLabel.set_text(resultObj);
+            this._confidenceBadge.hide();
+            this._reasoningLabel.hide();
+        } else {
+            this._answerLabel.set_text(resultObj.answer || '');
+            
+            if (resultObj.confidence_score !== undefined) {
+                let text = `Confidence: ${resultObj.confidence_score}%`;
+                if (resultObj.confidence_justification) {
+                    text += ` - ${resultObj.confidence_justification}`;
+                }
+                this._confidenceBadge.set_text(text);
+                this._confidenceBadge.show();
+            } else {
+                this._confidenceBadge.hide();
+            }
+
+            if (resultObj.reasoning) {
+                this._reasoningLabel.set_text(`Reasoning: ${resultObj.reasoning}`);
+                this._reasoningLabel.show();
+            } else {
+                this._reasoningLabel.hide();
+            }
+        }
+        
         this.show();
     }
 });

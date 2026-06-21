@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::io::Read;
+use std::io::{Read, Write};
 use serde_json::{json, Value};
 
 pub struct ModelManager;
@@ -143,6 +143,9 @@ impl ModelManager {
                 
                 for byte in stderr.bytes() {
                     if let Ok(b) = byte {
+                        print!("{}", b as char);
+                        let _ = std::io::stdout().flush();
+                        
                         if b == b'\r' || b == b'\n' {
                             let trimmed = current_line.trim();
                             if trimmed.ends_with('%') {

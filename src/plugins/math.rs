@@ -40,6 +40,8 @@ impl PluginTool for MathPlugin {
                 created_at: None,
                 indexed_at: None,
                 full_context: None,
+                ai_matched: None,
+                ai_reasoning: None,
             }];
         }
 
@@ -60,6 +62,8 @@ impl PluginTool for MathPlugin {
             created_at: None,
             indexed_at: None,
             full_context: None,
+            ai_matched: None,
+            ai_reasoning: None,
         }]
     }
 }

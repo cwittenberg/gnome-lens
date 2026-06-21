@@ -109,6 +109,10 @@ class GnomeLensSearchBar extends St.BoxLayout {
         }
     }
 
+    getQuery() {
+        return this._entry.get_text() || '';
+    }
+
     grabFocus() {
         this._entry.grab_key_focus();
         this._entry.clutter_text.grab_key_focus();
