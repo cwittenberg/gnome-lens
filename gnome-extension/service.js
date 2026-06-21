@@ -1,7 +1,7 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-export default class DaemonClient {
+export default class ServiceClient {
     constructor() {
         this._cancellable = null;
         this._socketClient = null;
@@ -31,6 +31,7 @@ export default class DaemonClient {
 
             this._outputStream = this._connection.get_output_stream();
             this._inputStream = new Gio.DataInputStream({ base_stream: this._connection.get_input_stream() });
+            this._inputStream.set_newline_type(Gio.DataStreamNewlineType.ANY);
 
             let payload = JSON.stringify({ query: query }) + '\n';
 
@@ -59,20 +60,18 @@ export default class DaemonClient {
                 return;
             }
 
-            if (!lineData) {
+            if (!lineData || !lineData[0]) {
                 return;
             }
 
-            let [line] = lineData;
-            if (!line) {
-                return;
-            }
-
-            try {
-                let parsed = JSON.parse(line);
-                if (this.callbacks.onMessage) this.callbacks.onMessage(parsed);
-            } catch (error) {
-                console.warn(`[Gnome Lens] Ignoring invalid daemon JSON: ${error}`);
+            let text = lineData[0].trim();
+            if (text.length > 0) {
+                try {
+                    let parsed = JSON.parse(text);
+                    if (this.callbacks.onMessage) this.callbacks.onMessage(parsed);
+                } catch (error) {
+                    console.warn(`[Gnome Lens] Ignoring invalid service JSON: ${error}`);
+                }
             }
 
             this._readStream();
@@ -80,8 +79,6 @@ export default class DaemonClient {
     }
 
     cancel() {
-        // Guarantee immediate background cancellation by writing 
-        // to the active stream before tearing the connection down.
         if (this._outputStream) {
             try {
                 let payload = JSON.stringify({ action: 'cancel' }) + '\n';

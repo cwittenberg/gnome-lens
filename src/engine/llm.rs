@@ -40,6 +40,10 @@ impl LlmService {
         ModelManager::ensure_model_available(&model_path, &model_url);
 
         let n_gpu = HardwareManager::get_optimal_gpu_layers();
+        
+        println!("[LLM] Note: If 'token_embd.weight' is mapped to the CPU in the following logs, this is EXPECTED.");
+        println!("[LLM] The embedding lookup table stays in system RAM for fast O(1) lookups, while all compute layers offload to the GPU.");
+        
         let model_params = LlamaModelParams::default().with_n_gpu_layers(n_gpu);
         
         let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
@@ -60,6 +64,10 @@ impl LlmService {
         let mut engine_guard = self.engine.lock().unwrap();
         
         let n_gpu = HardwareManager::get_optimal_gpu_layers();
+        
+        println!("[LLM] Note: If 'token_embd.weight' is mapped to the CPU in the following logs, this is EXPECTED.");
+        println!("[LLM] The embedding lookup table stays in system RAM for fast O(1) lookups, while all compute layers offload to the GPU.");
+        
         let new_model = LlamaModel::load_from_file(&engine_guard.backend, &model_path, &LlamaModelParams::default().with_n_gpu_layers(n_gpu))
             .map_err(|_| "Corrupted model file or failed to load into RAM")?;
         
@@ -119,7 +127,9 @@ impl LlmService {
         
         if tokens_list.len() > max_prompt_len {
             let excess = tokens_list.len() - max_prompt_len;
-            let start_drain = 50.min(tokens_list.len() / 2);
+            
+            // Protect the first 500 tokens (System Instructions) from being chopped
+            let start_drain = 500.min(tokens_list.len() / 2);
             let end_drain = (start_drain + excess).min(tokens_list.len().saturating_sub(20));
 
             if start_drain < end_drain {
@@ -192,7 +202,8 @@ impl LlmService {
                 break;
             }
 
-            let token_str = engine.model.token_to_piece(best_token, &mut decoder, false, None)
+            // 'special' flag set to true so stop tokens like <|endoftext|> resolve to strings and can be caught
+            let token_str = engine.model.token_to_piece(best_token, &mut decoder, true, None)
                 .unwrap_or_default();
                 
             output.push_str(&token_str);
@@ -200,8 +211,16 @@ impl LlmService {
             print!("{}", token_str);
             let _ = std::io::stdout().flush();
 
-            if output.contains("<|end|>") || output.contains("<|user|>") || output.contains("<|assistant|>") 
-                || output.contains("<|eot_id|>") || output.contains("<|im_end|>") || output.contains("<|im_start|>") {
+            // Exhaustive stop condition to catch all base model EOG strings across architectures
+            if output.contains("<|end|>") 
+                || output.contains("<|user|>") 
+                || output.contains("<|assistant|>") 
+                || output.contains("<|eot_id|>") 
+                || output.contains("<|im_end|>") 
+                || output.contains("<|im_start|>")
+                || output.contains("<|endoftext|>")
+                || output.contains("</s>") 
+            {
                 break;
             }
 

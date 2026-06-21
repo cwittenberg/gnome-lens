@@ -1,4 +1,3 @@
-// gnome-extension/build/ui.js
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
@@ -6,7 +5,7 @@ import St from 'gi://St';
 import GObject from 'gi://GObject';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import DaemonClient from './daemon.js';
+import ServiceClient from './service.js';
 import { GnomeLensSearchBar } from './ui_search.js';
 import { GnomeLensResultsList } from './ui_results.js';
 import { GnomeLensSynthesis, GnomeLensStatus } from './ui_status.js';
@@ -28,13 +27,13 @@ export const GnomeLensUI = GObject.registerClass({
 
         this._settings = settings;
         this._extension = extension;
-        this._daemon = new DaemonClient();
-
+        this._service = new ServiceClient();
         this._historyIndex = -1;
+
         this._modalGrab = null;
         this._modalPushed = false;
         this._stageCaptureConnected = false;
-
+        
         this.isOpen = false;
         this.isClosing = false;
 
@@ -54,6 +53,7 @@ export const GnomeLensUI = GObject.registerClass({
             style_class: 'lens-dialog',
             reactive: true,
         });
+        
         this._dialog.set_pivot_point(0.5, 0.5);
         this._dialog.set_scale(0.9, 0.9);
         this._dialog.set_opacity(0);
@@ -65,12 +65,13 @@ export const GnomeLensUI = GObject.registerClass({
         this._searchBar = new GnomeLensSearchBar(this._settings, {
             onClose: () => this.close(true),
             onClear: () => {
-                this._daemon.cancel();
+                this._service.cancel();
                 this._resultsList.clear();
                 this._synthesis.setSynthesis(null);
                 this._status.stopAnimation();
                 this._status.setStatus('');
                 this._searchBar.stopPulse();
+                this._searchBar.setCount(0);
                 this._updatePosition(false, true);
             },
             onSearch: (text) => {
@@ -230,6 +231,7 @@ export const GnomeLensUI = GObject.registerClass({
 
         this.isOpen = true;
         this.isClosing = false;
+        
         this.show();
         this.reactive = true;
         this._dialog.reactive = true;
@@ -266,8 +268,8 @@ export const GnomeLensUI = GObject.registerClass({
         this.isClosing = true;
         this.reactive = false;
         this._dialog.reactive = false;
-
-        this._daemon.cancel();
+        
+        this._service.cancel();
         this._status.stopAnimation();
         this._searchBar.stopPulse();
 
@@ -328,15 +330,14 @@ export const GnomeLensUI = GObject.registerClass({
 
     _launchResult(result) {
         this._extension.saveHistory(this._searchBar.getQuery());
-        let uri = null;
 
+        let uri = null;
         if (result.filepath) {
             let file = Gio.File.new_for_path(result.filepath);
             uri = file.get_uri();
         }
 
         this.close(true);
-
         if (!uri) return;
 
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
@@ -353,10 +354,10 @@ export const GnomeLensUI = GObject.registerClass({
     }
 
     _triggerBackendSearch(query) {
-        this._daemon.cancel();
+        this._service.cancel();
         this._searchBar.startPulse();
 
-        this._daemon.search(query, {
+        this._service.search(query, {
             onMessage: (data) => {
                 if (data.status === 'error') {
                     this._status.setStatus(data.message);
@@ -371,6 +372,8 @@ export const GnomeLensUI = GObject.registerClass({
 
                 if (data.results && Array.isArray(data.results)) {
                     this._resultsList.renderResults(data.results);
+                    this._searchBar.setCount(data.results.length);
+                    
                     if (data.results.length > 0) {
                         this._updatePosition(true, true);
                     }
@@ -380,7 +383,7 @@ export const GnomeLensUI = GObject.registerClass({
                 }
             },
             onOffline: () => {
-                this._status.setStatus('Daemon offline or unreachable.');
+                this._status.setStatus('Service offline or unreachable.');
                 this._searchBar.stopPulse();
             },
             onError: () => {
@@ -392,6 +395,7 @@ export const GnomeLensUI = GObject.registerClass({
     destroy() {
         this._disconnectStageCapture();
         this._popModal();
+
         if (this.isOpen || this.isClosing) {
             this.isOpen = false;
             this.isClosing = false;
@@ -400,9 +404,10 @@ export const GnomeLensUI = GObject.registerClass({
                 Main.layoutManager.uiGroup.remove_child(this);
             }
         }
-        this._daemon.cancel();
+
+        this._service.cancel();
         this.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
-        super.destroy(); 
+        super.destroy();
     }
 });

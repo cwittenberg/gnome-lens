@@ -19,14 +19,16 @@ class GnomeLensResultsList extends St.ScrollView {
         this._results = [];
         this._resultWidgets = [];
         this._selectedIndex = -1;
-
+        
         this._lastPointerX = -1;
         this._lastPointerY = -1;
+        this._ignoreHover = false;
 
         this._resultsBox = new St.BoxLayout({
             vertical: true,
             x_expand: true,
         });
+        
         this.add_child(this._resultsBox);
     }
 
@@ -48,14 +50,17 @@ class GnomeLensResultsList extends St.ScrollView {
 
     selectNext() {
         if (this._resultWidgets.length > 0 && this._selectedIndex < this._resultWidgets.length - 1) {
+            this._ignoreHover = true;
             this._setSelectedIndex(this._selectedIndex + 1);
         }
     }
 
     selectPrev() {
         if (this._selectedIndex > 0) {
+            this._ignoreHover = true;
             this._setSelectedIndex(this._selectedIndex - 1);
         } else if (this._selectedIndex === 0) {
+            this._ignoreHover = true;
             this._setSelectedIndex(-1);
         }
     }
@@ -70,12 +75,16 @@ class GnomeLensResultsList extends St.ScrollView {
         if (this._selectedIndex >= 0 && this._selectedIndex < this._resultWidgets.length) {
             this._resultWidgets[this._selectedIndex].remove_style_class_name('selected');
         }
+        
         this._selectedIndex = index;
+        
         if (this._selectedIndex >= 0 && this._selectedIndex < this._resultWidgets.length) {
             let widget = this._resultWidgets[this._selectedIndex];
             widget.add_style_class_name('selected');
 
-            let adjustment = this.vadjustment;
+            let adjustment = this.vscroll ? this.vscroll.adjustment : this.vadjustment;
+            if (!adjustment) return;
+            
             let val = adjustment.value;
             let pageSize = adjustment.page_size;
             let y = widget.allocation.y1;
@@ -92,6 +101,7 @@ class GnomeLensResultsList extends St.ScrollView {
     clear() {
         this._results = [];
         this._selectedIndex = -1;
+
         for (let widget of this._resultWidgets) {
             widget.reactive = false;
             widget.remove_all_transitions();
@@ -125,7 +135,6 @@ class GnomeLensResultsList extends St.ScrollView {
                 }
             });
         };
-
         checkNext(0);
     }
 
@@ -136,13 +145,18 @@ class GnomeLensResultsList extends St.ScrollView {
         }
 
         this.clear();
-        this._results = resultsArray;
+        
+        this._results = [...resultsArray].sort((a, b) => {
+            let aMatch = a.ai_matched !== false;
+            let bMatch = b.ai_matched !== false;
+            if (aMatch === bMatch) return 0;
+            return aMatch ? -1 : 1;
+        });
 
-        let maxRender = Math.min(resultsArray.length, 30);
+        let maxRender = Math.min(this._results.length, 30);
 
         for (let i = 0; i < maxRender; i++) {
-            let res = resultsArray[i];
-
+            let res = this._results[i];
             let itemBox = new St.BoxLayout({
                 style_class: 'lens-result-item',
                 vertical: false,
@@ -164,9 +178,15 @@ class GnomeLensResultsList extends St.ScrollView {
                 if (Math.abs(this._lastPointerX - x) > 1 || Math.abs(this._lastPointerY - y) > 1) {
                     this._lastPointerX = x;
                     this._lastPointerY = y;
-                    if (this._selectedIndex !== i) {
-                        this._setSelectedIndex(i);
-                    }
+                    this._ignoreHover = false;
+                }
+
+                if (this._ignoreHover) {
+                    return Clutter.EVENT_PROPAGATE;
+                }
+
+                if (this._selectedIndex !== i) {
+                    this._setSelectedIndex(i);
                 }
                 return Clutter.EVENT_PROPAGATE;
             };
@@ -192,6 +212,7 @@ class GnomeLensResultsList extends St.ScrollView {
                     iconName = 'x-office-spreadsheet-symbolic';
                 }
             }
+
             if (res.plugin_id === 'plugin:email') iconName = 'mail-unread-symbolic';
             if (res.plugin_id === 'plugin:math') iconName = 'accessories-calculator-symbolic';
 
@@ -203,7 +224,6 @@ class GnomeLensResultsList extends St.ScrollView {
             if ((isImagePreview || isVideoPreview) && res.filepath) {
                 this._fetchThumbnailAsync(res.filepath, iconActor, iconName);
             }
-
             itemBox.add_child(iconActor);
 
             let textBox = new St.BoxLayout({
@@ -228,7 +248,7 @@ class GnomeLensResultsList extends St.ScrollView {
             }
 
             if (res.ai_reasoning) {
-                let reasoningPrefix = res.ai_matched ? '✅ ' : '❌ ';
+                let reasoningPrefix = res.ai_matched ? '✨ ' : '❌ ';
                 let reasoningLabel = new St.Label({
                     text: reasoningPrefix + res.ai_reasoning,
                     style_class: 'lens-result-ai-reasoning',

@@ -1,41 +1,113 @@
 {
-    "active_model": "phi-3-mini-4k",
-    "models": {
-        "phi-3-mini-4k": {
-            "name": "Phi 3 Mini (4K)",
-            "filename": "Phi-3-mini-4k-instruct-q4.gguf",
-            "url": "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
-            "size_gb": 2.4,
-            "ram_required_gb": 3.0,
-            "parameters": "3.8B",
-            "description": "Microsoft's highly capable small model. Fast and highly reliable default."
-        },
-        "llama-3.1-8b": {
-            "name": "Llama 3.1 (8B)",
-            "filename": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-            "url": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-            "size_gb": 4.9,
-            "ram_required_gb": 6.0,
-            "parameters": "8.0B",
-            "description": "Meta's industry standard. Exceptionally smart for RAG but uses more RAM."
-        },
-        "qwen-2.5-3b": {
-            "name": "Qwen 2.5 (3B)",
-            "filename": "qwen2.5-3b-instruct-q4_k_m.gguf",
-            "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-            "size_gb": 1.9,
-            "ram_required_gb": 2.5,
-            "parameters": "3.0B",
-            "description": "Ultra-lightweight and lightning fast. Punches way above its weight class."
-        },
-        "qwen-2.5-7b": {
-            "name": "Qwen 2.5 (7B)",
-            "filename": "qwen2.5-7b-instruct-q4_k_m.gguf",
-            "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
-            "size_gb": 4.5,
-            "ram_required_gb": 5.5,
-            "parameters": "7.0B",
-            "description": "Outstanding multilingual support for non-English queries."
-        }
+  "active_model": "qwen3-8b-q4-k-m",
+  "models": {
+    "llama-3.1-8b": {
+      "name": "Llama 3.1 (8B)",
+      "filename": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "size_gb": 4.9,
+      "ram_required_gb": 6.5,
+      "parameters": "8.0B",
+      "context_tokens": 131072,
+      "category": "general",
+      "recommended": true,
+      "description": "Meta's strong general-purpose model. Good for RAG and broad assistant use, but Qwen is usually better for multilingual and coding use."
+    },
+    "qwen-2.5-3b": {
+      "name": "Qwen 2.5 (3B)",
+      "filename": "qwen2.5-3b-instruct-q4_k_m.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+      "size_gb": 1.9,
+      "ram_required_gb": 2.8,
+      "parameters": "3.0B",
+      "context_tokens": 32768,
+      "category": "small",
+      "recommended": true,
+      "description": "Ultra-lightweight Qwen model. Good for quick local responses, translation, summarization, and small helper tasks."
+    },
+    "qwen-2.5-7b": {
+      "name": "Qwen 2.5 (7B)",
+      "filename": "qwen2.5-7b-instruct-q4_k_m.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
+      "size_gb": 4.7,
+      "ram_required_gb": 6.5,
+      "parameters": "7.0B",
+      "context_tokens": 32768,
+      "category": "balanced",
+      "recommended": true,
+      "description": "Strong multilingual general-purpose model. Better quality than 3B while still realistic on small desktops."
+    },
+    "qwen2.5-coder-7b-q4-k-m": {
+      "name": "Qwen 2.5 Coder (7B)",
+      "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+      "size_gb": 4.68,
+      "ram_required_gb": 7.0,
+      "parameters": "7.0B",
+      "context_tokens": 32768,
+      "category": "coding",
+      "recommended": true,
+      "description": "Fast coding-specialized model. Realistic default choice for code explanation, snippets, refactoring, and developer workflows."
+    },
+    "qwen2.5-coder-14b-q4-k-m": {
+      "name": "Qwen 2.5 Coder (14B)",
+      "filename": "qwen2.5-coder-14b-instruct-q4_k_m.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/qwen2.5-coder-14b-instruct-q4_k_m.gguf",
+      "size_gb": 8.9,
+      "ram_required_gb": 12.0,
+      "parameters": "14.7B",
+      "context_tokens": 32768,
+      "category": "coding",
+      "recommended": true,
+      "description": "Serious local coding model. Slower than 7B, but much stronger for code reasoning and multi-step fixes."
+    },
+    "qwen3-8b-q4-k-m": {
+      "name": "Qwen 3 (8B)",
+      "filename": "Qwen3-8B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+      "size_gb": 4.7,
+      "ram_required_gb": 7.0,
+      "parameters": "8.2B",
+      "context_tokens": 32768,
+      "category": "recommended-default",
+      "recommended": true,
+      "description": "Best modern default for this machine. Strong reasoning, multilingual support, and good speed at Q4_K_M."
+    },
+    "qwen3-14b-q4-k-m": {
+      "name": "Qwen 3 (14B)",
+      "filename": "Qwen3-14B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Qwen_Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf",
+      "size_gb": 9.0,
+      "ram_required_gb": 13.0,
+      "parameters": "14.8B",
+      "context_tokens": 32768,
+      "category": "large-general",
+      "recommended": true,
+      "description": "Higher-quality Qwen3 option that still fits comfortably in 32 GB RAM. Good for reasoning when speed matters less."
+    },
+    "qwen3-coder-30b-a3b-ud-q4-k-xl": {
+      "name": "Qwen 3 Coder 30B-A3B",
+      "filename": "Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
+      "size_gb": 17.7,
+      "ram_required_gb": 24.0,
+      "parameters": "30.5B total / 3.3B active",
+      "context_tokens": 32768,
+      "category": "heavy-coding",
+      "recommended": false,
+      "description": "Cool high-end local coding model for your 32 GB machine. Realistic, but heavy; expect slower startup and inference."
+    },
+    "devstral-small-2507-q4-k-m": {
+      "name": "Devstral Small 2507",
+      "filename": "Devstral-Small-2507-Q4_K_M.gguf",
+      "url": "https://huggingface.co/mistralai/Devstral-Small-2507_gguf/resolve/main/Devstral-Small-2507-Q4_K_M.gguf",
+      "size_gb": 14.33,
+      "ram_required_gb": 22.0,
+      "parameters": "24B",
+      "context_tokens": 131072,
+      "category": "agentic-coding",
+      "recommended": false,
+      "description": "Agentic software-engineering model. Fits in 32 GB RAM at Q4_K_M, but it is heavy and better suited to long coding-agent sessions."
     }
+  }
 }

@@ -1,4 +1,3 @@
-// gnome-extension/prefs_ai.js
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
@@ -17,16 +16,15 @@ class AIEngineManager {
     }
 
     buildUI() {
-        this.statusGroup = new Adw.PreferencesGroup({ title: 'Daemon Status' });
+        this.statusGroup = new Adw.PreferencesGroup({ title: 'Service Status' });
 
         this.statusRow = new Adw.ActionRow({ title: '🟡 Connecting...', subtitle: 'Pinging IPC socket...' });
         
         this.spinner = new Gtk.Spinner({
             valign: Gtk.Align.CENTER,
-            margin_end: 12,
             visible: false
         });
-        this.statusRow.add_prefix(this.spinner);
+        this.statusRow.add_suffix(this.spinner);
         
         this.statusGroup.add(this.statusRow);
 
@@ -56,10 +54,11 @@ class AIEngineManager {
         socketClient.connect_async(address, cancellable, (client, res) => {
             try {
                 let connection = client.connect_finish(res);
-                this.statusRow.set_title('🟢 Daemon Online');
+                this.statusRow.set_title('🟢 Service Online');
                 
                 let outputStream = connection.get_output_stream();
                 let inputStream = new Gio.DataInputStream({ base_stream: connection.get_input_stream() });
+                inputStream.set_newline_type(Gio.DataStreamNewlineType.ANY);
                 
                 let payloadStr = JSON.stringify(payloadObj) + '\n';
                 
@@ -73,9 +72,9 @@ class AIEngineManager {
                 });
             } catch (e) {
                 if (!cancellable.is_cancelled()) {
-                    this.statusRow.set_title('🔴 Daemon Offline');
+                    this.statusRow.set_title('🔴 Service Offline');
                     this.statusRow.set_subtitle('Is the rust background service running?');
-                    this.hwStatusRow.set_subtitle('Daemon unreachable.');
+                    this.hwStatusRow.set_subtitle('Service unreachable.');
                     this.spinner.stop();
                     this.spinner.set_visible(false);
                 }
@@ -92,12 +91,17 @@ class AIEngineManager {
         inputStream.read_line_async(GLib.PRIORITY_DEFAULT, cancellable, (stream, res) => {
             try {
                 let lineData = stream.read_line_finish_utf8(res);
-                if (lineData && lineData[0]) {
-                    onMessage(JSON.parse(lineData[0]));
-                    // Continue reading if the daemon is streaming chunks (like cURL progress)
+                if (lineData && lineData[0] !== null) {
+                    let text = lineData[0].trim();
+                    if (text.length > 0) {
+                        try {
+                            onMessage(JSON.parse(text));
+                        } catch (err) {
+                            console.warn('[Gnome Lens] Invalid JSON in stream:', text);
+                        }
+                    }
                     this._readLoop(inputStream, cancellable, onMessage, connection);
                 } else {
-                    // Daemon closed stream gracefully after fulfilling the request
                     this._cleanupConnection(inputStream, null, connection);
                 }
             } catch (error) {
@@ -127,7 +131,7 @@ class AIEngineManager {
             if (data.status === 'config_data') {
                 this.spinner.stop();
                 this.spinner.set_visible(false);
-                this.statusRow.set_subtitle('Ready for integration.');
+                this.statusRow.set_subtitle('Ready.');
                 this._renderModels(data.data);
             }
         });
@@ -162,8 +166,8 @@ class AIEngineManager {
             if (data.status === 'processing') {
                 this.statusRow.set_subtitle(data.message);
             } else if (data.status === 'done') {
-                this.statusRow.set_title('🟢 Daemon Online');
-                this.statusRow.set_subtitle(data.message || 'Ready for integration.');
+                this.statusRow.set_title('🟢 Service Online');
+                this.statusRow.set_subtitle(data.message || 'Ready.');
                 this.requestConfig();
             } else if (data.status === 'error') {
                 this.spinner.stop();

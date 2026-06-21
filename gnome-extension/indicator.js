@@ -29,7 +29,7 @@ export const GnomeLensIndicator = GObject.registerClass(
             
             this.menu.connectObject('open-state-changed', (menu, isOpen) => {
                 if (isOpen) {
-                    this._checkDaemonStatus();
+                    this._checkServiceStatus();
                 }
             }, this);
         }
@@ -62,7 +62,7 @@ export const GnomeLensIndicator = GObject.registerClass(
             return Clutter.EVENT_PROPAGATE;
         }
 
-        _checkDaemonStatus() {
+        _checkServiceStatus() {
             let socketClient = new Gio.SocketClient();
             let socketPath = GLib.get_home_dir() + '/.local/state/gnome-lens/gnome_lens.sock';
             let address = Gio.UnixSocketAddress.new(socketPath);
@@ -71,9 +71,9 @@ export const GnomeLensIndicator = GObject.registerClass(
                 try {
                     let conn = client.connect_finish(res);
                     conn.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
-                    this._statusItem.label.set_text('🟢 Daemon: Online');
+                    this._statusItem.label.set_text('🟢 Service: Online');
                 } catch (e) {
-                    this._statusItem.label.set_text('🔴 Daemon: Offline');
+                    this._statusItem.label.set_text('🔴 Service: Offline');
                 }
             });
         }
@@ -81,7 +81,7 @@ export const GnomeLensIndicator = GObject.registerClass(
         _buildMenu() {
             this.menu.removeAll();
 
-            this._statusItem = new PopupMenu.PopupMenuItem('🟡 Daemon: Checking...', { reactive: false });
+            this._statusItem = new PopupMenu.PopupMenuItem('🟡 Service: Checking...', { reactive: false });
             this.menu.addMenuItem(this._statusItem);
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());

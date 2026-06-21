@@ -12,7 +12,7 @@ export function buildAboutPage() {
 
     const titleRow = new Adw.ActionRow({
         title: 'Gnome Lens',
-        subtitle: 'Spotlight-alike intelligent search utilizing the local Gnome Lens Daemon.',
+        subtitle: 'Spotlight-alike intelligent search utilizing the local Gnome Lens Service.',
     });
     group.add(titleRow);
 

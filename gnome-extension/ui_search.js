@@ -32,9 +32,18 @@ class GnomeLensSearchBar extends St.BoxLayout {
             y_align: Clutter.ActorAlign.CENTER,
             can_focus: true,
         });
+
         this._entry.clutter_text.connectObject('text-changed', this._onTextChanged.bind(this), this);
         this._entry.clutter_text.connectObject('key-press-event', this._onKeyPress.bind(this), this);
         this.add_child(this._entry);
+
+        this._countLabel = new St.Label({
+            style_class: 'lens-count-label',
+            y_align: Clutter.ActorAlign.CENTER,
+            text: '',
+            visible: false
+        });
+        this.add_child(this._countLabel);
 
         this._closeButton = new St.Button({
             style_class: 'lens-close-button',
@@ -43,13 +52,16 @@ class GnomeLensSearchBar extends St.BoxLayout {
             reactive: true,
             can_focus: true,
         });
+
         this._closeButton.connectObject('button-press-event', () => {
             if (this.callbacks.onClose) this.callbacks.onClose();
             return Clutter.EVENT_STOP;
         }, this);
+
         this._closeButton.connectObject('clicked', () => {
             if (this.callbacks.onClose) this.callbacks.onClose();
         }, this);
+
         this.add_child(this._closeButton);
     }
 
@@ -118,6 +130,15 @@ class GnomeLensSearchBar extends St.BoxLayout {
         this._entry.clutter_text.grab_key_focus();
     }
 
+    setCount(count) {
+        if (count > 0) {
+            this._countLabel.set_text(`${count} results`);
+            this._countLabel.show();
+        } else {
+            this._countLabel.hide();
+        }
+    }
+
     startPulse() {
         if (this._isSearching) return;
         this._isSearching = true;
@@ -126,6 +147,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
     _runPulse() {
         if (!this._isSearching) return;
+        
         this._searchIcon.remove_all_transitions();
         this._searchIcon.ease({
             opacity: 100,
