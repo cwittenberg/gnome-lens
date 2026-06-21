@@ -34,27 +34,34 @@ impl LlmStrategy for ScriptCompilerStrategy {
             - `parse_float(string)`: Safely converts a string to a number.\n\
             - `contains_ignore_case(string, search)`: Case-insensitive substring match.\n\
             \n\
-            Example Query: \"PDFs about taxes over 500\"\n\
-            Example Output:\n\
-            let is_pdf = metadata.filetype == \"pdf\";\n\
-            let has_tax = contains_ignore_case(text, \"tax\");\n\
-            let amount_str = regex_extract(text, \"(?i)(?:total|amount|usd|\\\\$)[^\\\\d]*(\\\\d+\\\\.?\\\\d*)\");\n\
-            let amount_val = parse_float(amount_str);\n\
-            is_pdf && has_tax && amount_val > 500.0\n\
-            \n\
-            Example Query: \"Receipts from Apple or Amazon\"\n\
+            Example Query: \"Receipts over 500\"\n\
             Example Output:\n\
             let is_receipt = contains_ignore_case(text, \"receipt\");\n\
-            let from_apple = contains_ignore_case(text, \"apple\");\n\
-            let from_amazon = contains_ignore_case(text, \"amazon\");\n\
-            is_receipt && (from_apple || from_amazon)\n\
+            let amount_str = regex_extract(text, \"(?i)(?:total|amount|usd|\\\\$|cost)[^\\\\d]*(\\\\d+\\\\.?\\\\d*)\");\n\
+            let amount_val = parse_float(amount_str);\n\
+            is_receipt && amount_val > 500.0\n\
+            \n\
+            Example Query: \"Research papers cited more than 50 times\"\n\
+            Example Output:\n\
+            let is_paper = contains_ignore_case(text, \"research\") || contains_ignore_case(text, \"abstract\");\n\
+            let cited_str = regex_extract(text, \"(?i)(?:cited|citations|times|index)[^\\\\d]*(\\\\d+\\\\.?\\\\d*)\");\n\
+            let cited_val = parse_float(cited_str);\n\
+            is_paper && cited_val > 50.0\n\
+            \n\
+            Example Query: \"MP3 songs longer than 3 minutes\"\n\
+            Example Output:\n\
+            let is_mp3 = metadata.filetype == \"mp3\" || contains_ignore_case(text, \"song\");\n\
+            let length_str = regex_extract(text, \"(?i)(?:length|duration|minutes|time)[^\\\\d]*(\\\\d+\\\\.?\\\\d*)\");\n\
+            let length_val = parse_float(length_str);\n\
+            is_mp3 && length_val > 3.0\n\
             \n\
             CRITICAL RULES:\n\
             1. Output ONLY valid Rhai script. No markdown formatting, no ```rhai blocks, no explanations.\n\
             2. The script MUST implicitly return a boolean value at the end.\n\
             3. DEFAULT TO AND: ALWAYS use `&&` (AND) to combine conditions unless the user's prompt explicitly uses the word \"or\".\n\
-            4. USE QUERY VALUES: You MUST extract the EXACT numbers and terms requested in the user's prompt. Do NOT blindly copy numbers like '500' from the examples.\n\
-            5. ROBUST EXTRACTION: Use `(?:total|amount|usd|\\\\$)[^\\\\d]*(\\\\d+\\\\.?\\\\d*)` in regex to safely skip formatting like newlines, quotes, or commas when looking for a financial number.\n\
+            4. USE QUERY VALUES: You MUST extract the EXACT numbers and terms requested in the user's prompt. Do NOT blindly copy numbers from the examples.\n\
+            5. ROBUST DYNAMIC EXTRACTION: When extracting numbers, you MUST dynamically generate context-relevant keywords for the non-capturing group based on the user's query domain. Pattern: `(?i)(?:<keyword1>|<keyword2>|<keyword3>)[^\\\\d]*(\\\\d+\\\\.?\\\\d*)`. This skips unpredictable formatting (newlines, symbols) between the keyword and the target number.\n\
+            6. TRANSLATE LOGIC: NEVER use quantitative words like 'more', 'less', 'under', 'over' inside a literal regex pattern. You MUST extract the targeted number using `parse_float(regex_extract(...))` and then apply mathematical operators (>, <, >=, <=) inside the Rhai script.\n\
             \n\
             Query: \"{}\"<|im_end|>\n\
             <|im_start|>assistant\n",
@@ -62,7 +69,7 @@ impl LlmStrategy for ScriptCompilerStrategy {
         );
 
         // Lower token limit enforces concise functional chaining instead of sprawling procedural logic
-        let response = core.generate_text("SCRIPT_COMPILER_STRATEGY", &prompt, 180, is_cancelled);
+        let response = core.generate_text("SCRIPT_COMPILER_STRATEGY", &prompt, 200, is_cancelled);
         
         let mut clean_resp = response.trim().to_string();
         if clean_resp.starts_with("```rhai") {
