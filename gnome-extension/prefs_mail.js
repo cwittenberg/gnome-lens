@@ -4,7 +4,6 @@ import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-// Advanced wrapper for firing UI commands into the Rust IPC Socket and asynchronously receiving responses
 function sendDaemonCommand(payloadObj, onMessage) {
     let cancellable = new Gio.Cancellable();
     let socketClient = new Gio.SocketClient();
@@ -55,22 +54,28 @@ class MailConfigManager {
         this.page = page;
         this.configPath = GLib.get_home_dir() + '/.config/gnome-lens/gmail.json';
         this.pollId = null;
+        this._timeoutIds = [];
         this.buildUI();
         this.loadExistingConfig();
     }
 
+    _registerTimeout(id) {
+        if (id > 0) this._timeoutIds.push(id);
+        return id;
+    }
+
     buildUI() {
         this.gmailGroup = new Adw.PreferencesGroup({ 
-            title: 'Gmail Integration',
+             title: 'Gmail Integration',
             description: 'Sync your Gmail inbox locally for instant, private semantic search. Because Google enforces strict security, you must use an App Password, not your standard account password.'
         });
 
-        // Instructional Row
         const helpRow = new Adw.ActionRow({
             title: 'How to get an App Password',
             subtitle: 'Go to Google Account -> Security -> 2-Step Verification -> App Passwords.',
             activatable: true
         });
+
         const helpIcon = new Gtk.Image({ icon_name: 'external-link-symbolic', valign: Gtk.Align.CENTER });
         helpRow.add_suffix(helpIcon);
         helpRow.connect('activated', () => {
@@ -78,34 +83,30 @@ class MailConfigManager {
         });
         this.gmailGroup.add(helpRow);
 
-        // Email Input
         this.emailRow = new Adw.EntryRow({
             title: 'Google Email Address',
             show_apply_button: false
         });
         this.gmailGroup.add(this.emailRow);
 
-        // App Password Input (Obfuscated)
         this.passwordRow = new Adw.PasswordEntryRow({
             title: '16-Character App Password',
             show_apply_button: false
         });
         this.gmailGroup.add(this.passwordRow);
 
-        // History Limit Input
         this.historyRow = new Adw.SpinRow({
             title: 'History to Sync (Years)',
             subtitle: 'Limit the initial download to recent emails (Max 5 years).',
-            adjustment: new Gtk.Adjustment({ 
-                lower: 1, 
-                upper: 5, 
-                step_increment: 1, 
-                value: 1 
-            })
+            adjustment: new Gtk.Adjustment({
+                 lower: 1,
+                 upper: 5,
+                 step_increment: 1,
+                 value: 1
+             })
         });
         this.gmailGroup.add(this.historyRow);
 
-        // Action Buttons
         const buttonBox = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 12,
@@ -143,7 +144,6 @@ class MailConfigManager {
         this.gmailGroup.add(buttonBox);
         this.page.add(this.gmailGroup);
 
-        // Live Sync Status Monitor UI
         this.syncGroup = new Adw.PreferencesGroup({ title: 'Live Sync Status' });
         this.progressRow = new Adw.ActionRow({ title: 'Idle' });
         
@@ -156,7 +156,6 @@ class MailConfigManager {
             margin_end: 12,
             visible: false
         });
-
         this.progressBar = new Gtk.ProgressBar({
             show_text: true,
             hexpand: true,
@@ -169,13 +168,12 @@ class MailConfigManager {
         
         this.page.add(this.syncGroup);
 
-        // Data Management Group (Re-sync and Wipe)
         this.dataGroup = new Adw.PreferencesGroup({ title: 'Data Management' });
-
         this.resyncRow = new Adw.ActionRow({
             title: 'Force Re-Sync',
             subtitle: 'Forget the last indexed date and download emails from the configured history limit again.'
         });
+
         this.resyncBtn = new Gtk.Button({
             icon_name: 'view-refresh-symbolic',
             valign: Gtk.Align.CENTER,
@@ -186,10 +184,10 @@ class MailConfigManager {
         this.resyncBtn.connect('clicked', () => {
             this.resyncBtn.set_sensitive(false);
             sendDaemonCommand({ action: 'mail_resync' }, (data) => {
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+                this._registerTimeout(GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
                     this.resyncBtn.set_sensitive(true);
                     return GLib.SOURCE_REMOVE;
-                });
+                }));
             });
         });
         this.resyncRow.add_suffix(this.resyncBtn);
@@ -199,6 +197,7 @@ class MailConfigManager {
             title: 'Wipe Local Mail Data',
             subtitle: 'Permanently delete all downloaded .eml files and immediately remove them from the search index.'
         });
+
         this.wipeBtn = new Gtk.Button({
             icon_name: 'edit-clear-all-symbolic',
             valign: Gtk.Align.CENTER,
@@ -209,15 +208,15 @@ class MailConfigManager {
         this.wipeBtn.connect('clicked', () => {
             this.wipeBtn.set_sensitive(false);
             sendDaemonCommand({ action: 'mail_wipe' }, (data) => {
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+                this._registerTimeout(GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
                     this.wipeBtn.set_sensitive(true);
                     return GLib.SOURCE_REMOVE;
-                });
+                }));
             });
         });
+
         this.wipeRow.add_suffix(this.wipeBtn);
         this.dataGroup.add(this.wipeRow);
-
         this.page.add(this.dataGroup);
     }
 
@@ -227,18 +226,17 @@ class MailConfigManager {
                 if (data.status === 'mail_status' && data.data) {
                     let state = data.data;
                     
-                    // Clear error classes initially
                     this.progressRow.remove_css_class('error-row');
                     this.progressBar.remove_css_class('destructive-action');
 
                     if (state.is_error) {
                         this.progressBox.set_visible(true);
-                        this.progressRow.set_title(`⚠️ Sync Fault: ${state.message}`);
+                        this.progressRow.set_title(`  Sync Fault: ${state.message}`);
                         this.progressBar.add_css_class('destructive-action');
                         this.progressBar.set_fraction(0.0);
                     } else if (state.is_syncing) {
                         this.progressBox.set_visible(true);
-                        this.progressRow.set_title(`🔄 ${state.message || 'Syncing entries...'}`);
+                        this.progressRow.set_title(`  ${state.message || 'Syncing entries...'}`);
                         
                         let total = state.total_emails || 1;
                         let current = state.synced_emails || 0;
@@ -248,7 +246,7 @@ class MailConfigManager {
                         this.progressBar.set_fraction(fraction);
                     } else {
                         this.progressBox.set_visible(false);
-                        this.progressRow.set_title(`🟢 ${state.message || 'Idle'}`);
+                        this.progressRow.set_title(`  ${state.message || 'Idle'}`);
                     }
                 }
             });
@@ -283,7 +281,7 @@ class MailConfigManager {
 
     saveConfig() {
         let email = this.emailRow.get_text().trim();
-        let password = this.passwordRow.get_text().trim().replace(/[\s\r\n]+/g, ''); 
+        let password = this.passwordRow.get_text().trim().replace(/[\s\r\n]+/g, '');
         let historyYears = this.historyRow.get_value();
 
         if (!email || !password) {
@@ -323,10 +321,10 @@ class MailConfigManager {
 
             this.statusLabel.set_label('Saved! Background daemon is syncing.');
             
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 4000, () => {
+            this._registerTimeout(GLib.timeout_add(GLib.PRIORITY_DEFAULT, 4000, () => {
                 this.statusLabel.set_label('');
                 return GLib.SOURCE_REMOVE;
-            });
+            }));
 
         } catch (e) {
             console.error('[Gnome Lens] Failed to save Gmail config:', e);
@@ -355,14 +353,20 @@ class MailConfigManager {
             GLib.source_remove(this.pollId);
             this.pollId = null;
         }
+        if (this._timeoutIds) {
+            for (let t of this._timeoutIds) {
+                if (t > 0) GLib.source_remove(t);
+            }
+            this._timeoutIds = [];
+        }
     }
 }
 
 export function buildMailPage(settings, window) {
     const page = new Adw.PreferencesPage({ 
-        title: 'Mail Sync', 
-        icon_name: 'mail-unread-symbolic' 
-    });
+         title: 'Mail Sync', 
+         icon_name: 'mail-unread-symbolic' 
+     });
 
     let manager = new MailConfigManager(page);
     manager.startPolling();

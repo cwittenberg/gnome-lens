@@ -14,6 +14,35 @@ use crate::vector::VectorStore;
 use crate::engine::llm::{LlmService, LlmIntent};
 use crate::engine::vision::VisionEngine;
 
+// Interpreter Utility: Resolves Leap Years
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+// Interpreter Utility: Converts explicit YYYY-MM-DD into UNIX epochs natively
+fn parse_date_to_timestamp(date_str: &str) -> Option<u64> {
+    let parts: Vec<&str> = date_str.split('-').collect();
+    if parts.len() == 3 {
+        if let (Ok(y), Ok(m), Ok(d)) = (parts[0].parse::<i32>(), parts[1].parse::<u32>(), parts[2].parse::<u32>()) {
+            let mut days = 0;
+            for year in 1970..y {
+                days += if is_leap_year(year) { 366 } else { 365 };
+            }
+            let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            for month in 0..(m - 1) as usize {
+                if month == 1 && is_leap_year(y) {
+                    days += 29;
+                } else {
+                    days += month_days[month];
+                }
+            }
+            days += (d - 1) as i32;
+            return Some((days as u64) * 86400);
+        }
+    }
+    None
+}
+
 pub struct SystemRouter {
     plugins: Vec<Box<dyn PluginTool>>,
     llm: Arc<LlmService>,
@@ -96,6 +125,7 @@ impl SystemRouter {
             min_timestamp: None,
             max_timestamp: None,
             metadata_filters: HashMap::new(),
+            directory_filter: None,
             filter_strategy,
             prioritize_folders,
         };
@@ -103,6 +133,38 @@ impl SystemRouter {
         if search_query.is_synthesis_request {
             search_query.raw_text = search_query.raw_text[1..].trim().to_string();
         }
+
+        // =====================================================================
+        // THE INTERPRETER PATTERN: Extract Explicit System Rules deterministically 
+        // =====================================================================
+        let mut clean_text_parts = Vec::new();
+        for token in search_query.raw_text.split_whitespace() {
+            let lower_token = token.to_lowercase();
+            
+            if lower_token.starts_with("ext:") || lower_token.starts_with("type:") {
+                let val = token.split(':').nth(1).unwrap_or("");
+                search_query.metadata_filters.insert("filetype".to_string(), val.to_lowercase());
+            } else if lower_token.starts_with("dir:") || lower_token.starts_with("path:") {
+                let val = token.split(':').nth(1).unwrap_or("");
+                let expanded = val.replace("~", &std::env::var("HOME").unwrap_or_default());
+                search_query.directory_filter = Some(expanded);
+            } else if lower_token.starts_with("after:") || lower_token.starts_with("since:") {
+                let val = token.split(':').nth(1).unwrap_or("");
+                if let Some(ts) = parse_date_to_timestamp(val) {
+                    search_query.min_timestamp = Some(ts);
+                }
+            } else if lower_token.starts_with("before:") {
+                let val = token.split(':').nth(1).unwrap_or("");
+                if let Some(ts) = parse_date_to_timestamp(val) {
+                    search_query.max_timestamp = Some(ts);
+                }
+            } else {
+                clean_text_parts.push(token);
+            }
+        }
+        
+        // Re-join the query having stripped out the syntactical commands to prevent embedding pollution
+        search_query.raw_text = clean_text_parts.join(" ");
 
         let filetypes = vec!["pdf", "docx", "txt", "csv", "png", "jpg", "xlsx", "directory"];
         for ft in &filetypes {

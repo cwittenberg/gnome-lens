@@ -50,6 +50,7 @@ impl PluginTool for VectorSearchPlugin {
             query.min_timestamp,
             query.max_timestamp,
             &query.metadata_filters,
+            query.directory_filter.as_ref(),
             self.id(),
             query.prioritize_folders
         )

@@ -374,7 +374,8 @@ impl VectorStore {
         if norm_a == 0.0 || norm_b == 0.0 { 0.0 } else { dot_product / (norm_a.sqrt() * norm_b.sqrt()) }
     }
 
-    pub fn search(&self, target_embedding: &[f32], raw_query_text: &str, min_ts: Option<u64>, max_ts: Option<u64>, filters: &HashMap<String, String>, plugin_id: &str, prioritize_folders: bool) -> Vec<SearchResult> {
+    // Extended Strategy signature passing down the explicitly parsed constraints
+    pub fn search(&self, target_embedding: &[f32], raw_query_text: &str, min_ts: Option<u64>, max_ts: Option<u64>, filters: &HashMap<String, String>, directory_filter: Option<&String>, plugin_id: &str, prioritize_folders: bool) -> Vec<SearchResult> {
         let conn = match self.conn.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -452,11 +453,21 @@ impl VectorStore {
 
         let mut sql = String::from("SELECT id, embedding, metadata FROM documents WHERE 1=1");
         
+        // --- Builder Context Execution Block ---
+        // Explicitly executes the deterministic rules extracted by the router interface
+        
         if let Some(min) = min_ts { sql.push_str(&format!(" AND modified_at >= {}", min)); }
         if let Some(max) = max_ts { sql.push_str(&format!(" AND modified_at <= {}", max)); }
         
+        if let Some(dir) = directory_filter {
+            // Apply lightweight sanitization to prevent accidental SQL syntax breakage
+            let safe_dir = dir.replace("'", "''");
+            sql.push_str(&format!(" AND id LIKE '{}%'", safe_dir));
+        }
+
         for (key, val) in filters {
-            sql.push_str(&format!(" AND json_extract(metadata, '$.{}') = '{}'", key, val));
+            let safe_val = val.replace("'", "''");
+            sql.push_str(&format!(" AND json_extract(metadata, '$.{}') = '{}'", key, safe_val));
         }
 
         let mut stmt = conn.prepare(&sql).expect("Failed to prepare search statement");

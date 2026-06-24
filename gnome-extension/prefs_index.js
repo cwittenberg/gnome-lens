@@ -4,7 +4,6 @@ import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-// Advanced wrapper for firing UI commands into the Rust IPC Socket and asynchronously receiving responses
 function sendDaemonCommand(payloadObj, onMessage) {
     let cancellable = new Gio.Cancellable();
     let socketClient = new Gio.SocketClient();
@@ -52,15 +51,12 @@ function sendDaemonCommand(payloadObj, onMessage) {
     });
 }
 
-// Helper to find the binary even if GNOME Shell is missing user PATH variables
-// Thinks outside the box by automatically falling back to common development paths.
 function getDaemonExecPath() {
     let execPath = GLib.find_program_in_path('gnome-lens');
     if (execPath) return execPath;
 
     let home = GLib.get_home_dir();
     
-    // 1. Check standard system and cargo locations, plus explicit hot-reload dev paths
     let standardPaths = [
         home + '/.cargo/bin/gnome-lens',
         home + '/.local/bin/gnome-lens',
@@ -72,8 +68,6 @@ function getDaemonExecPath() {
         if (GLib.file_test(p, GLib.FileTest.EXISTS)) return p;
     }
 
-    // 2. Think outside the box: Dynamic search fallback
-    // In case the project was cloned into a different dev directory, execute a quick sync search
     try {
         let [success, stdout] = GLib.spawn_command_line_sync(
             `sh -c "find $HOME/Development $HOME/Projects $HOME/dev $HOME/src $HOME/workspace -maxdepth 5 -type f -name gnome-lens -executable 2>/dev/null | head -n 1"`
@@ -85,23 +79,29 @@ function getDaemonExecPath() {
     } catch (e) {
         console.warn("[Gnome Lens] Error dynamically searching for dev binary:", e);
     }
-
-    return 'gnome-lens'; // Absolute fallback
+    
+    return 'gnome-lens';
 }
 
 export function buildIndexPage(settings, window) {
     const page = new Adw.PreferencesPage({ 
-        title: 'Indexation', 
-        icon_name: 'folder-saved-search-symbolic' 
-    });
+         title: 'Indexation', 
+         icon_name: 'folder-saved-search-symbolic' 
+     });
 
     let isProcessing = false;
+    let _timeoutIds = [];
 
-    // ==========================================
-    // 1. SERVICE DAEMON CONTROLLER GROUP
-    // ==========================================
+    const safeTimeout = (duration, callback) => {
+        let id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, duration, () => {
+            callback();
+            return GLib.SOURCE_REMOVE;
+        });
+        _timeoutIds.push(id);
+    };
+
     const serviceGroup = new Adw.PreferencesGroup({ 
-        title: 'Background Service Management',
+         title: 'Background Service Management',
         description: 'Control the lifecycle of the local Gnome Lens ingestion engine process.'
     });
 
@@ -117,7 +117,6 @@ export function buildIndexPage(settings, window) {
     });
     statusRow.add_prefix(spinner);
 
-    // Control Buttons
     const startBtn = new Gtk.Button({
         icon_name: 'media-playlist-start-symbolic',
         valign: Gtk.Align.CENTER,
@@ -139,10 +138,8 @@ export function buildIndexPage(settings, window) {
         tooltip_text: 'Restart Background Daemon'
     });
 
-    // Native IPC and Subprocess integration (EGO-Compliant)
     const updateServiceUI = (silent = false) => {
-        if (isProcessing) return; // Prevent background pings from overriding active UI flows
-
+        if (isProcessing) return; 
         if (!silent) {
             spinner.set_visible(true);
             spinner.start();
@@ -150,20 +147,19 @@ export function buildIndexPage(settings, window) {
 
         sendDaemonCommand({ action: 'ping' }, (data) => {
             if (isProcessing) return;
-
             if (!silent) {
                 spinner.stop();
                 spinner.set_visible(false);
             }
-
+            
             if (data.status === 'error') {
-                statusRow.set_title('🔴 Service Status: Stopped');
+                statusRow.set_title('  Service Status: Stopped');
                 statusRow.set_subtitle('The background ingestion engine is inactive.');
                 startBtn.set_sensitive(true);
                 stopBtn.set_sensitive(false);
                 restartBtn.set_sensitive(false);
             } else {
-                statusRow.set_title('🟢 Service Status: Running');
+                statusRow.set_title('  Service Status: Running');
                 statusRow.set_subtitle('Active and listening for IPC commands.');
                 startBtn.set_sensitive(false);
                 stopBtn.set_sensitive(true);
@@ -177,7 +173,8 @@ export function buildIndexPage(settings, window) {
         startBtn.set_sensitive(false);
         stopBtn.set_sensitive(false);
         restartBtn.set_sensitive(false);
-        statusRow.set_title('🟡 Service Status: Starting...');
+        
+        statusRow.set_title('  Service Status: Starting...');
         statusRow.set_subtitle('Booting daemon...');
         spinner.set_visible(true);
         spinner.start();
@@ -190,17 +187,16 @@ export function buildIndexPage(settings, window) {
             });
             proc.init(null);
             
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            safeTimeout(1000, () => {
                 isProcessing = false;
                 updateServiceUI();
                 loadStats();
-                return GLib.SOURCE_REMOVE;
             });
         } catch (e) {
             isProcessing = false;
             spinner.stop();
             spinner.set_visible(false);
-            statusRow.set_title('🔴 Launch Failed');
+            statusRow.set_title('  Launch Failed');
             statusRow.set_subtitle(e.message);
             startBtn.set_sensitive(true);
         }
@@ -211,17 +207,17 @@ export function buildIndexPage(settings, window) {
         startBtn.set_sensitive(false);
         stopBtn.set_sensitive(false);
         restartBtn.set_sensitive(false);
-        statusRow.set_title('🟡 Service Status: Stopping...');
+        
+        statusRow.set_title('  Service Status: Stopping...');
         statusRow.set_subtitle('Shutting down gracefully...');
         spinner.set_visible(true);
         spinner.start();
 
         sendDaemonCommand({ action: 'shutdown' }, () => {});
         
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+        safeTimeout(1000, () => {
             isProcessing = false;
             updateServiceUI();
-            return GLib.SOURCE_REMOVE;
         });
     });
 
@@ -230,15 +226,15 @@ export function buildIndexPage(settings, window) {
         startBtn.set_sensitive(false);
         stopBtn.set_sensitive(false);
         restartBtn.set_sensitive(false);
-        statusRow.set_title('🟡 Service Status: Restarting...');
+        
+        statusRow.set_title('  Service Status: Restarting...');
         statusRow.set_subtitle('Cycling daemon processes...');
         spinner.set_visible(true);
         spinner.start();
 
         sendDaemonCommand({ action: 'shutdown' }, () => {});
         
-        // Wait longer (1.5s) to ensure the previous UNIX socket is completely flushed and unlinked
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+        safeTimeout(1500, () => {
             try {
                 let execPath = getDaemonExecPath();
                 let proc = new Gio.Subprocess({
@@ -248,22 +244,20 @@ export function buildIndexPage(settings, window) {
                 proc.init(null);
             } catch (e) {
                 console.warn("Restart failed to launch binary:", e);
-                statusRow.set_title('🔴 Launch Failed');
+                statusRow.set_title('  Launch Failed');
                 statusRow.set_subtitle(e.message);
                 spinner.stop();
                 spinner.set_visible(false);
                 isProcessing = false;
                 startBtn.set_sensitive(true);
-                return GLib.SOURCE_REMOVE;
+                return;
             }
 
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            safeTimeout(1000, () => {
                 isProcessing = false;
                 updateServiceUI();
                 loadStats();
-                return GLib.SOURCE_REMOVE;
             });
-            return GLib.SOURCE_REMOVE;
         });
     });
 
@@ -273,7 +267,6 @@ export function buildIndexPage(settings, window) {
     serviceGroup.add(statusRow);
     page.add(serviceGroup);
 
-    // Set up continuous background health check every 3 seconds
     let healthCheckId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
         updateServiceUI(true);
         return GLib.SOURCE_CONTINUE;
@@ -284,11 +277,12 @@ export function buildIndexPage(settings, window) {
             GLib.source_remove(healthCheckId);
             healthCheckId = 0;
         }
+        for (let t of _timeoutIds) {
+            if (t > 0) GLib.source_remove(t);
+        }
+        _timeoutIds = [];
     });
 
-    // ==========================================
-    // 2. SCOPE GROUP (Full System & Depth)
-    // ==========================================
     const scopeGroup = new Adw.PreferencesGroup({ title: 'Indexing Scope' });
     
     const fullSysRow = new Adw.SwitchRow({
@@ -301,12 +295,12 @@ export function buildIndexPage(settings, window) {
     const depthRow = new Adw.SpinRow({
         title: 'Max Recursion Depth',
         subtitle: 'Requires a daemon restart to apply new kernel watches.',
-        adjustment: new Gtk.Adjustment({ 
-            lower: 1, 
-            upper: 15, 
-            step_increment: 1, 
-            value: settings.get_int('index-max-depth') 
-        })
+        adjustment: new Gtk.Adjustment({
+             lower: 1,
+             upper: 15,
+             step_increment: 1,
+             value: settings.get_int('index-max-depth')
+         })
     });
     settings.bind('index-max-depth', depthRow.adjustment, 'value', Gio.SettingsBindFlags.DEFAULT);
     
@@ -321,19 +315,17 @@ export function buildIndexPage(settings, window) {
     if (settings.get_int('index-max-depth') > 3) {
         depthRow.set_subtitle('High depth detected. You MUST manually increase fs.inotify.max_user_watches in your OS.');
     }
-
+    
     scopeGroup.add(depthRow);
     page.add(scopeGroup);
 
-    // ==========================================
-    // 3. TARGET PATHS GROUP
-    // ==========================================
     const pathGroup = new Adw.PreferencesGroup({ 
-        title: 'Specific Target Directories',
+         title: 'Specific Target Directories',
         description: 'Directories to recursively index when Full Home Indexation is disabled.'
     });
     
     let pathRows = [];
+    
     const updatePaths = () => {
         pathRows.forEach(row => pathGroup.remove(row));
         pathRows = [];
@@ -365,6 +357,7 @@ export function buildIndexPage(settings, window) {
         margin_end: 8
     });
     addPathBtn.add_css_class('suggested-action');
+    
     addPathBtn.connect('clicked', () => {
         let dialog = new Gtk.FileDialog({ title: 'Select Directory to Index' });
         dialog.select_folder(window, null, (dlg, res) => {
@@ -385,10 +378,10 @@ export function buildIndexPage(settings, window) {
                     }
                 }
             } catch (e) {
-                // User cancelled dialog
             }
         });
     });
+    
     addPathRow.add_suffix(addPathBtn);
     pathGroup.add(addPathRow);
     updatePaths();
@@ -400,14 +393,11 @@ export function buildIndexPage(settings, window) {
     
     page.add(pathGroup);
 
-    // ==========================================
-    // 4. BLACKLIST GROUP
-    // ==========================================
     const blacklistGroup = new Adw.PreferencesGroup({ 
-        title: 'Blacklisted Names',
+         title: 'Blacklisted Names',
         description: 'Folder or file names that will be explicitly ignored during indexing (e.g. node_modules, .git).'
     });
-
+    
     let blacklistRows = [];
     const updateBlacklist = () => {
         blacklistRows.forEach(row => blacklistGroup.remove(row));
@@ -434,7 +424,7 @@ export function buildIndexPage(settings, window) {
     };
 
     const addBlacklistRow = new Adw.EntryRow({ 
-        title: 'Add new ignore rule...',
+         title: 'Add new ignore rule...',
         show_apply_button: true 
     });
     addBlacklistRow.connect('apply', () => {
@@ -449,16 +439,14 @@ export function buildIndexPage(settings, window) {
             addBlacklistRow.set_text('');
         }
     });
+
     blacklistGroup.add(addBlacklistRow);
     updateBlacklist();
     
     page.add(blacklistGroup);
 
-    // ==========================================
-    // 5. DATABASE MAINTENANCE GROUP
-    // ==========================================
     const maintenanceGroup = new Adw.PreferencesGroup({ 
-        title: 'Database Maintenance',
+         title: 'Database Maintenance',
         description: 'Advanced options for managing the vector index.'
     });
 
@@ -492,12 +480,13 @@ export function buildIndexPage(settings, window) {
                 }
                 let sizeStr = size.toFixed(2) + ' ' + sizes[i];
                 
-                statsRow.set_subtitle(`${records} items indexed  •  ${sizeStr} on disk`);
+                statsRow.set_subtitle(`${records} items indexed     ${sizeStr} on disk`);
             } else if (data.status === 'error') {
                 statsRow.set_subtitle('Service offline. Please start the background daemon.');
             }
         });
     };
+
     refreshBtn.connect('clicked', loadStats);
     maintenanceGroup.add(statsRow);
 
@@ -519,11 +508,10 @@ export function buildIndexPage(settings, window) {
         
         sendDaemonCommand({ action: 'reindex' }, null);
         
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
+        safeTimeout(3000, () => {
             reindexBtn.set_sensitive(true);
             reindexBtn.set_label('Re-index');
             loadStats(); 
-            return GLib.SOURCE_REMOVE;
         });
     });
 
@@ -531,7 +519,6 @@ export function buildIndexPage(settings, window) {
     maintenanceGroup.add(reindexRow);
     page.add(maintenanceGroup);
 
-    // Initial Bootstrap
     updateServiceUI();
     loadStats();
 

@@ -26,6 +26,7 @@ pub struct SearchQuery {
     pub min_timestamp: Option<u64>,
     pub max_timestamp: Option<u64>,
     pub metadata_filters: HashMap<String, String>,
+    pub directory_filter: Option<String>,
     pub filter_strategy: Option<String>,
     pub prioritize_folders: bool,
 }
