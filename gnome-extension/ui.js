@@ -27,7 +27,7 @@ export const GnomeLensUI = GObject.registerClass({
         this._settings = settings;
         this._extension = extension;
         this._service = new ServiceClient();
-        this._activeLaunches = []; // Anchor to prevent aggressive GJS garbage collection
+        this._activeLaunches = []; 
         this._historyIndex = -1;
         this._modalGrab = null;
         this._modalPushed = false;
@@ -36,10 +36,13 @@ export const GnomeLensUI = GObject.registerClass({
         this.isOpen = false;
         this.isClosing = false;
         this._buildUI();
+        
+        // This is why clicking pills failed before; the backdrop captures clicks.
         this.connectObject('button-press-event', () => {
             this.close();
             return Clutter.EVENT_STOP;
         }, this);
+        
         Main.layoutManager.connectObject('monitors-changed', this._onMonitorsChanged.bind(this), this);
         
         this._settings.connectObject(
@@ -47,8 +50,8 @@ export const GnomeLensUI = GObject.registerClass({
             'changed::ui-transparency', this._applyStyles.bind(this),
             'changed::ui-shadow', this._applyStyles.bind(this),
             'changed::show-document-text', () => {
-                if (this._resultsList && this._resultsList.hasResults()) {
-                    this._resultsList.renderResults([...this._resultsList.getResults()]);
+                if (this._lastResults && this._lastResults.length > 0) {
+                    this._resultsList.renderResults(this._lastResults, this._activeFilter);
                 }
             },
             this
@@ -90,7 +93,6 @@ export const GnomeLensUI = GObject.registerClass({
     }
 
     _logDebug(message, isWarning = false) {
-        // Hardcoded debug flag ensures we never throw fatal schema lookup errors
         const DEBUG_IPC = false; 
         if (DEBUG_IPC) {
             if (isWarning) {
@@ -114,10 +116,14 @@ export const GnomeLensUI = GObject.registerClass({
         this._dialog.connectObject('button-press-event', () => {
             return Clutter.EVENT_STOP;
         }, this);
+        
         this._searchBar = new GnomeLensSearchBar(this._settings, {
             onClose: () => this.close(true),
             onClear: () => {
                 this._service.cancel();
+                this._lastResults = [];
+                this._activeFilter = 'All';
+                this._updateFilterPills([]);
                 this._resultsList.clear();
                 this._synthesis.setSynthesis(null);
                 this._status.stopAnimation();
@@ -164,16 +170,111 @@ export const GnomeLensUI = GObject.registerClass({
             }
         });
         this._dialog.add_child(this._searchBar);
+
+        // Filter Pills Subsystem
+        this._activeFilter = 'All';
+        this._lastResults = [];
+
+        this._filtersBox = new St.BoxLayout({
+            style_class: 'lens-filters-box',
+            vertical: false,
+            x_align: Clutter.ActorAlign.START,
+            visible: false
+        });
+        this._dialog.add_child(this._filtersBox);
+
         this._resultsList = new GnomeLensResultsList(this._settings, {
             onLaunch: (result, action) => this._launchResult(result, action)
         });
         this._dialog.add_child(this._resultsList);
+        
         this._synthesis = new GnomeLensSynthesis();
         this._resultsList.addSynthesisWidget(this._synthesis);
+        
         this._status = new GnomeLensStatus(this._settings);
         this._dialog.add_child(this._status);
+        
         this.add_child(this._dialog);
         this._updatePosition(false, false);
+    }
+
+    _updateFilterPills(results) {
+        this._filtersBox.destroy_all_children();
+        
+        let hasFolders = false, hasApps = false, hasEmails = false, hasFiles = false;
+        
+        if (results && results.length > 0) {
+            results.forEach(r => {
+                let ext = '';
+                if (r.metadata && r.metadata.filetype) {
+                    ext = r.metadata.filetype.toLowerCase();
+                } else if (r.filepath) {
+                    let parts = r.filepath.split('.');
+                    if (parts.length > 1) {
+                        ext = parts.pop().toLowerCase();
+                    }
+                }
+
+                let isFolder = ['directory', 'folder', 'inode/directory'].includes(ext) || r.plugin_id === 'plugin:folder' || r.plugin_id === 'plugin:directory';
+                let isApp = r.plugin_id === 'plugin:app_launcher' || r.plugin_id === 'plugin:math';
+                let isEmail = r.plugin_id === 'plugin:email' || ext === 'eml';
+
+                if (isFolder) hasFolders = true;
+                else if (isApp) hasApps = true;
+                else if (isEmail) hasEmails = true;
+                else hasFiles = true;
+            });
+        }
+
+        let options = ['All'];
+        if (hasFiles) options.push('Files');
+        if (hasFolders) options.push('Folders');
+        if (hasApps) options.push('Apps');
+        if (hasEmails) options.push('Emails');
+
+        // Only render the pill tray if there's actually a category to separate out
+        if (options.length > 1) {
+            this._filtersBox.show();
+            options.forEach(f => {
+                let btn = new St.Button({
+                    label: f,
+                    style_class: 'lens-filter-pill',
+                    can_focus: true,
+                    reactive: true
+                });
+                
+                if (f === this._activeFilter) {
+                    btn.add_style_class_name('active');
+                }
+                
+                // CRITICAL FIX: Intercept the raw press/release to stop the backdrop from closing
+                btn.connectObject('button-press-event', () => {
+                    this._setActiveFilter(f);
+                    return Clutter.EVENT_STOP;
+                }, this);
+                
+                btn.connectObject('button-release-event', () => {
+                    return Clutter.EVENT_STOP;
+                }, this);
+
+                this._filtersBox.add_child(btn);
+            });
+        } else {
+            this._filtersBox.hide();
+        }
+    }
+
+    _setActiveFilter(filterName) {
+        if (this._activeFilter === filterName) return; // Prevent unnecessary DOM redraws
+        
+        this._activeFilter = filterName;
+        this._updateFilterPills(this._lastResults); // Rebuild to shuffle 'active' CSS classes
+        
+        if (this._lastResults && this._lastResults.length > 0) {
+            this._resultsList.renderResults(this._lastResults, this._activeFilter);
+            this._searchBar.setCount(this._resultsList.getCount());
+            this._updatePosition(this._resultsList.hasResults(), true);
+        }
     }
 
     _getActiveMonitor() {
@@ -195,16 +296,24 @@ export const GnomeLensUI = GObject.registerClass({
                  
         this.set_position(monitor.x, monitor.y);
         this.set_size(monitor.width, monitor.height);
-        let dialogWidth = Math.min(1560, Math.floor(monitor.width * 0.85));
+        
+        // CSS pixels in GNOME Shell natively adjust to logical scaling on Wayland.
+        // monitor.width is already in logical bounds (e.g., 1920 on a 4K 200% screen).
+        // By relying purely on relative width % clamped to a logical limit, scaling is flawless.
+        let dialogWidth = Math.max(700, Math.min(1000, Math.floor(monitor.width * 0.5)));
         this._dialog.set_width(dialogWidth);
-        let maxScrollHeight = Math.min(700, Math.floor(monitor.height * 0.75));
+        
+        let maxScrollHeight = Math.max(400, Math.min(800, Math.floor(monitor.height * 0.6)));
         this._resultsList.style = `max-height: ${maxScrollHeight}px;`;
+        
         let targetX = Math.floor((monitor.width - dialogWidth) / 2);
         let targetY = hasResults
             ? Math.floor(monitor.height * 0.20)
-            : Math.floor(monitor.height * 0.40);
+            : Math.floor(monitor.height * 0.35); 
+            
         this._dialog.remove_transition('x');
         this._dialog.remove_transition('y');
+        
         let anim = this._getAnimationParams(250, false);
         if (animate && anim.duration > 0) {
             this._dialog.ease({
@@ -282,6 +391,9 @@ export const GnomeLensUI = GObject.registerClass({
         this._connectStageCapture();
                  
         this._historyIndex = -1;
+        this._activeFilter = 'All';
+        this._lastResults = [];
+        this._updateFilterPills([]); // Reset UI explicitly
         this._updatePosition(this._resultsList.hasResults(), false);
                  
         this._dialog.remove_all_transitions();
@@ -372,8 +484,6 @@ export const GnomeLensUI = GObject.registerClass({
 
     _launchResult(result, action = 'open') {
         this._extension.saveHistory(this._searchBar.getQuery());
-        
-        // This cleanly cancels existing streams inside `this._service` and tears down the UI
         this.close(true); 
 
         let delegationCallback = {
@@ -388,7 +498,6 @@ export const GnomeLensUI = GObject.registerClass({
                         }
                                                  
                         let uri = targetPath;
-                        // Dynamically route between Web URLs (Gmail) and local file lookups
                         if (!targetPath.startsWith('http')) {
                             if (!GLib.file_test(targetPath, GLib.FileTest.EXISTS)) {
                                 this._logDebug(`[Gnome Lens] [IPC Chain] Abort: The file or directory no longer exists on disk: ${targetPath}`, true);
@@ -467,9 +576,15 @@ export const GnomeLensUI = GObject.registerClass({
     _triggerBackendSearch(query) {
         this._service.cancel();
         this._searchBar.startPulse();
-        this._synthesis.setSynthesis(null); // Clear previous answer immediately on text change
+        this._synthesis.setSynthesis(null); 
+        
+        // Reset pills instantly while new data fetches
+        this._activeFilter = 'All';     
+        this._updateFilterPills([]);    
+        
         let filterStrategy = this._settings.get_string('ai-filter-strategy');
         let prioritizeFolders = this._settings.get_boolean('prioritize-folders');
+        
         this._service.search(query, filterStrategy, prioritizeFolders, {
             onMessage: (data) => {
                 if (data.status === 'error') {
@@ -482,14 +597,19 @@ export const GnomeLensUI = GObject.registerClass({
                     this._status.stopAnimation();
                     this._searchBar.stopPulse();
                     if (data.mode !== 'rag_synthesis') {
-                        this._synthesis.setSynthesis(null); // Explicitly clean view if search mode shifts out of synthesis
+                        this._synthesis.setSynthesis(null); 
                     }
                 }
                 if (data.results && Array.isArray(data.results)) {
-                    this._resultsList.renderResults(data.results);
-                    this._searchBar.setCount(data.results.length);
+                    this._lastResults = data.results;
+                    
+                    // Render the pill tabs organically from available payload types
+                    this._updateFilterPills(this._lastResults); 
+                    
+                    this._resultsList.renderResults(this._lastResults, this._activeFilter);
+                    this._searchBar.setCount(this._resultsList.getCount());
                                          
-                    if (data.results.length > 0) {
+                    if (this._resultsList.hasResults()) {
                         this._updatePosition(true, true);
                     }
                     if (data.mode === 'rag_synthesis' && data.synthesis_result) {

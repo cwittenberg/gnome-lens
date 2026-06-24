@@ -36,7 +36,6 @@ impl LlmStrategy for SynthesisStrategy {
                 let doc_date = doc.metadata.get("date").or_else(|| doc.metadata.get("created_at")).unwrap_or(&String::from("Unknown Date")).clone();
                 let doc_author = doc.metadata.get("from").or_else(|| doc.metadata.get("author")).unwrap_or(&String::from("Unknown Author")).clone();
                              
-                // Loud boundaries prevent "Attention Leakage" (Source 3 blurring into Source 6)
                 if is_shallow {
                     context_block.push_str(&format!(
                         "--- BEGIN SOURCE [{}] ---\nFilename: {}\nPath: {:?}\nDate: {}\nAuthor: {}\nContent:\n[SHALLOW FILE METADATA ONLY. CONTENT UNINDEXED AND UNREADABLE.]\n--- END SOURCE [{}] ---\n\n", 
@@ -55,9 +54,6 @@ impl LlmStrategy for SynthesisStrategy {
 
         let current_unix_ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
-        // THE FIX: We remove the "strict/skeptical lawyer" persona. We remove the requirement
-        // for the LLM to write out a reasoning block. We explicitly tell it NOT to be pedantic.
-        // It just reads the context, gives the answer, and lists the numbers.
         let prompt = format!(
             "<|im_start|>system\nYou are a helpful and direct local data assistant. You MUST answer the user's question using ONLY the provided local file CONTEXT. General knowledge is FORBIDDEN.\nCurrent System UNIX Timestamp: {}<|im_end|>\n\
             <|im_start|>user\n\
@@ -80,23 +76,20 @@ impl LlmStrategy for SynthesisStrategy {
         
         let full_response = format!("ANSWER: {}", response);
                  
-        let mut answer = String::new();
         let mut sources_str = String::new();
         
-        // Extract the Answer and Sources list cleanly
         let upper_response = full_response.to_uppercase();
-        if let Some(ans_idx) = upper_response.find("ANSWER:") {
+        let answer = if let Some(ans_idx) = upper_response.find("ANSWER:") {
             if let Some(src_idx) = upper_response.find("SOURCES:") {
-                answer = full_response[ans_idx + 7..src_idx].trim().to_string();
                 sources_str = full_response[src_idx + 8..].trim().to_string();
+                full_response[ans_idx + 7..src_idx].trim().to_string()
             } else {
-                answer = full_response[ans_idx + 7..].trim().to_string();
+                full_response[ans_idx + 7..].trim().to_string()
             }
         } else {
-            answer = full_response.clone();
-        }
+            full_response.clone()
+        };
 
-        // Strict fallback evaluation
         let lower_ans = answer.to_lowercase();
         if lower_ans.contains("i don't know") || lower_ans.contains("i do not know") {
             return serde_json::json!({
@@ -108,7 +101,6 @@ impl LlmStrategy for SynthesisStrategy {
             });
         }
         
-        // Safely parse the numbers out of the SOURCES: block
         let mut cited_indices = std::collections::HashSet::new();
         let numbers_only: String = sources_str.chars().filter(|c| c.is_ascii_digit() || *c == ',' || *c == ' ').collect();
         for part in numbers_only.split(',') {
@@ -117,7 +109,6 @@ impl LlmStrategy for SynthesisStrategy {
             }
         }
         
-        // Backup: scan the answer text in case the LLM wrote "Source [3]" inside the answer
         for i in 1..=15 {
             let marker1 = format!("[{}]", i);
             let marker2 = format!("Source [{}]", i);
@@ -126,9 +117,6 @@ impl LlmStrategy for SynthesisStrategy {
             }
         }
 
-        // --- NATIVE DETERMINISTIC EVIDENCE INJECTION ---
-        // Instead of asking the LLM to write the evidence and hoping it doesn't hallucinate,
-        // we use the numbers it provided to fetch the undeniable FTS5 snippet from SQLite.
         let mut evidence_blocks = Vec::new();
         let mut sorted_indices: Vec<usize> = cited_indices.iter().copied().collect();
         sorted_indices.sort_unstable();
@@ -144,7 +132,6 @@ impl LlmStrategy for SynthesisStrategy {
             }
         }
 
-        // We map the database quotes directly to the 'reasoning' field in the UI
         let final_reasoning = if evidence_blocks.is_empty() {
             "No direct quotes extracted.".to_string()
         } else {

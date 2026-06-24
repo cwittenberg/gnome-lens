@@ -1,17 +1,4 @@
 // src/triggers/gmail_sync.rs
-/*
- * ============================================================================================
- * ARCHITECTURE NOTE REGARDING LOCAL EML STORAGE SECURITY:
- * We cannot delete the .eml files from the disk after ingestion because the VectorStore's 
- * mark-and-sweep garbage collector (`prune_orphans`) will automatically delete the database 
- * embeddings if the source file goes missing. The raw files are also strictly required for 
- * the local LLM to generate RAG synthesis answers on the fly.
- * * To mitigate the security risk of storing raw emails locally, the daemon now explicitly 
- * enforces UNIX `0700` permissions on the mailbox directory and `0600` on every `.eml` file 
- * written. This ensures only the active user account (and root) can read or access them.
- * ============================================================================================
- */
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -54,16 +41,13 @@ impl GmailSyncDaemon {
         let state_file = self.state_file.clone();
 
         thread::spawn(move || {
-            println!("[Gmail Sync] Background sync daemon thread spawned successfully.");
             loop {
                 if let Ok(config_data) = fs::read_to_string(&config_path) {
                     if let Ok(config) = serde_json::from_str::<serde_json::Value>(&config_data) {
                         if let (Some(email), Some(password)) = (config["email"].as_str(), config["app_password"].as_str()) {
                             let history_years = config["history_years"].as_u64().unwrap_or(1).clamp(1, 5) as u32;
-                            println!("[Gmail Sync] Starting cyclical mailbox synchronization pass for: {}", email);
                             Self::sync_inbox(email, password, &mail_dir, &state_file, history_years);
                         } else {
-                            println!("[Gmail Sync] Sync skipped: Missing 'email' or 'app_password' keys inside gmail.json.");
                             Self::write_state(&state_file, 0, false, 0, 0, "Missing credentials.", true, vec![]);
                         }
                     }
@@ -119,13 +103,17 @@ impl GmailSyncDaemon {
         Self::write_state(state_file, last_uid, true, 0, 0, "Connecting to IMAP securely...", false, uncommitted_backlog.clone());
 
         let domain = "imap.gmail.com";
-        let tls = TlsConnector::builder().build().expect("Failed to build TLS connector");
+        let tls_res = TlsConnector::builder().build();
+        if tls_res.is_err() {
+            Self::write_state(state_file, last_uid, false, 0, 0, "TLS connection generation failed", true, uncommitted_backlog);
+            return;
+        }
+        let tls = tls_res.unwrap();
         
         let client = match imap::connect((domain, 993), domain, &tls) {
             Ok(c) => c,
             Err(e) => {
                 let err_msg = format!("Network Connection Error: {}", e);
-                eprintln!("[Gmail Sync] {}", err_msg);
                 Self::write_state(state_file, last_uid, false, 0, 0, &err_msg, true, uncommitted_backlog);
                 return;
             }
@@ -133,9 +121,8 @@ impl GmailSyncDaemon {
 
         let mut session = match client.login(email, password) {
             Ok(s) => s,
-            Err((e, _)) => {
+            Err((_, _)) => {
                 let err_msg = format!("Login Rejected: Invalid Email or App Password.");
-                eprintln!("[Gmail Sync] IMAP Auth Failure: {}", e);
                 Self::write_state(state_file, last_uid, false, 0, 0, &err_msg, true, uncommitted_backlog);
                 return;
             }
@@ -143,15 +130,11 @@ impl GmailSyncDaemon {
 
         if let Err(e) = session.select("INBOX") {
             let err_msg = format!("Folder Selection Error: {}", e);
-            eprintln!("[Gmail Sync] {}", err_msg);
             Self::write_state(state_file, last_uid, false, 0, 0, &err_msg, true, uncommitted_backlog);
             return;
         }
 
-        // Strategy Pass: If an uncommitted backlog was left behind by an accidental crash/termination,
-        // prioritize syncing those specific lost messages instead of advancing the global timeline.
         let mut uids = if !uncommitted_backlog.is_empty() {
-            println!("[Gmail Sync] Transaction recovery triggered! Resolving {} uncommitted message items...", uncommitted_backlog.len());
             uncommitted_backlog.clone()
         } else {
             let query = if last_uid == 0 {
@@ -171,20 +154,16 @@ impl GmailSyncDaemon {
 
         let total_unindexed_count = uids.len();
         if total_unindexed_count == 0 {
-            println!("[Gmail Sync] Mailbox structure is perfectly synchronized.");
             Self::write_state(state_file, last_uid, false, 0, 0, "Inbox is fully synchronized.", false, vec![]);
             let _ = session.logout();
             return;
         }
 
-        // Cap batch size window to avoid rate limits
         let processing_backlog = total_unindexed_count > 500;
         if processing_backlog && uncommitted_backlog.is_empty() {
             uids = uids.into_iter().take(500).collect();
         }
 
-        // Transaction Entry Phase: Persist all target UIDs to uncommitted state before pulling data.
-        // If the execution environment drops midway, we retain an exact roadmap of the missed records.
         let mut active_uncommitted = uids.clone();
         Self::write_state(state_file, last_uid, true, total_unindexed_count, 0, "Synchronizing messages...", false, active_uncommitted.clone());
 
@@ -200,23 +179,6 @@ impl GmailSyncDaemon {
                         let uid = msg.uid.unwrap_or(0);
                         if let Some(body) = msg.body() {
                             let file_path = mail_dir.join(format!("{}.eml", uid));
-                            
-                            let mut subject = String::from("No Subject");
-                            let mut from = String::from("Unknown Sender");
-                            let header_chunk = &body[0..std::cmp::min(body.len(), 4096)];
-                            let header_str = String::from_utf8_lossy(header_chunk);
-                            
-                            for line in header_str.lines() {
-                                if line.is_empty() { break; } 
-                                let lower = line.to_lowercase();
-                                if lower.starts_with("subject:") {
-                                    subject = line[8..].trim().to_string();
-                                } else if lower.starts_with("from:") {
-                                    from = line[5..].trim().to_string();
-                                }
-                            }
-                            
-                            println!("[Gmail Sync] + Downloaded UID {}: \"{}\" from [{}]", uid, subject, from);
 
                             if fs::write(&file_path, body).is_ok() {
                                 #[cfg(unix)]
@@ -227,7 +189,6 @@ impl GmailSyncDaemon {
                                     }
                                 }
                                 downloaded_count += 1;
-                                // Atomic commit: remove successfully saved email from uncommitted pool
                                 active_uncommitted.retain(|&x| x != uid);
                             }
                         }
@@ -238,7 +199,6 @@ impl GmailSyncDaemon {
                 }
                 Err(e) => {
                     let err_msg = format!("Mime Batch Fetch Error: {}", e);
-                    eprintln!("[Gmail Sync] {}", err_msg);
                     Self::write_state(state_file, last_uid, false, total_unindexed_count, downloaded_count, &err_msg, true, active_uncommitted);
                     return;
                 }
@@ -256,7 +216,6 @@ impl GmailSyncDaemon {
             );
         }
 
-        // Two-Phase Final Commit: Only advance the true high-water mark if the execution queue is entirely processed
         let final_committed_uid = if active_uncommitted.is_empty() { tracking_highest_uid } else { last_uid };
         
         Self::write_state(

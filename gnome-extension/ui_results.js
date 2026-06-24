@@ -154,7 +154,7 @@ class GnomeLensResultsList extends St.ScrollView {
         checkNext(0);
     }
 
-    renderResults(resultsArray) {
+    renderResults(resultsArray, activeFilter = 'All') {
         let oldSelectedId = null;
         if (this._selectedIndex >= 0 && this._selectedIndex < this._results.length) {
             oldSelectedId = this._results[this._selectedIndex].id;
@@ -187,8 +187,18 @@ class GnomeLensResultsList extends St.ScrollView {
             return 3;
         };
         
+        let filteredArray = resultsArray.filter(res => {
+            if (activeFilter === 'All') return true;
+            let group = getGroup(res);
+            if (activeFilter === 'Folders') return group === 0;
+            if (activeFilter === 'Apps') return group === 1;
+            if (activeFilter === 'Emails') return group === 2;
+            if (activeFilter === 'Files') return group === 3 || group === 4;
+            return true;
+        });
+
         // Advanced Grouping and Sorting Pipeline
-        this._results = [...resultsArray].sort((a, b) => {
+        this._results = [...filteredArray].sort((a, b) => {
             let aMatch = a.ai_matched !== false;
             let bMatch = b.ai_matched !== false;
             if (aMatch !== bMatch) return aMatch ? -1 : 1;

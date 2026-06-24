@@ -13,19 +13,13 @@ struct Worker {
 impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
         let thread = thread::spawn(move || loop {
-            let lock_result = receiver.lock();
-            let message = match lock_result {
+            let message = match receiver.lock() {
                 Ok(guard) => guard.recv(),
                 Err(poisoned) => poisoned.into_inner().recv(),
             };
             
             match message {
-                Ok(job) => {
-                    // Prevent individual request panics from killing the daemon worker
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        job();
-                    }));
-                },
+                Ok(job) => job(),
                 Err(_) => break, 
             }
         });
@@ -56,7 +50,7 @@ impl ThreadPool {
     {
         let job = Box::new(f);
         if let Some(sender) = &self.sender {
-            let _ = sender.send(job); // safely ignore if disconnected
+            let _ = sender.send(job);
         }
     }
 }

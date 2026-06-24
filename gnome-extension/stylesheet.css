@@ -13,7 +13,32 @@
 
 .lens-entry-container {
     padding: 12px 16px;
+}
+
+.lens-filters-box {
+    padding: 0px 16px 12px 16px;
+    spacing: 10px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.lens-filter-pill {
+    padding: 6px 16px;
+    border-radius: 16px;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 10.5pt;
+    font-weight: 700;
+    transition-duration: 150ms;
+}
+
+.lens-filter-pill:hover, .lens-filter-pill:focus {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+}
+
+.lens-filter-pill.active {
+    background-color: rgba(53, 132, 228, 0.9);
+    color: #ffffff;
 }
 
 .lens-entry {
