@@ -435,7 +435,7 @@ class GnomeLensResultsList extends St.ScrollView {
                 } else if (['png', 'jpg', 'jpeg', 'bmp', 'webp', 'svg', 'gif'].includes(ext)) {
                     isImagePreview = true;
                     iconName = 'image-x-generic-symbolic';
-                } else if (['mp4', 'mkv', 'webm', 'avi', 'mov', 'flv'].includes(ext)) {
+                } else if (['mp4', 'mkv', 'webm', 'avi', 'mov', 'flv', 'mpg', 'mpeg', 'wmv'].includes(ext)) {
                     isVideoPreview = true;
                     iconName = 'video-x-generic-symbolic';
                 } else if (['pdf'].includes(ext)) {

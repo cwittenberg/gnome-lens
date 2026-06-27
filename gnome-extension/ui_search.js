@@ -280,10 +280,17 @@ class GnomeLensAdvancedFilters extends St.BoxLayout {
     getFilterString() {
         let parts = [];
         let dir = this._dirEntry.get_text().trim();
-        let ext = this._extEntry.get_text().trim();
+        let extRaw = this._extEntry.get_text().trim();
 
         if (dir) parts.push(`dir:${dir}`);
-        if (ext) parts.push(`ext:${ext}`);
+        if (extRaw) {
+            let cleanedExts = extRaw.split(',')
+                .map(e => e.trim().replace(/^\.+/, ''))
+                .filter(e => e.length > 0);
+            if (cleanedExts.length > 0) {
+                parts.push(`ext:${cleanedExts.join(',')}`);
+            }
+        }
         
         if (this._activeDateOption.days) {
             let d = new Date();
@@ -450,6 +457,12 @@ class GnomeLensSearchBar extends St.BoxLayout {
         this._backButton.visible = history.length > 0;
     }
 
+    _updateButtonVisibility(text) {
+        this._clearButton.visible = text.length > 0;
+        let isDirQuery = text.startsWith('/') || text.startsWith('~/');
+        this._upButton.visible = isDirQuery && text !== '/' && text !== '~/' && text !== '~';
+    }
+
     _navigateUpDirectory() {
         let text = this._entry.get_text();
         if (text.startsWith('/') || text.startsWith('~/')) {
@@ -482,10 +495,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
         let text = this._entry.get_text();
         this._autocompleteActive = false;
 
-        this._clearButton.visible = text.length > 0;
-
-        let isDirQuery = text.startsWith('/') || text.startsWith('~/');
-        this._upButton.visible = isDirQuery && text !== '/' && text !== '~/' && text !== '~';
+        this._updateButtonVisibility(text);
 
         let cursorPos = this._entry.clutter_text.get_cursor_position();
 
@@ -567,6 +577,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
         let delay = 350;
         
+        let isDirQuery = text.startsWith('/') || text.startsWith('~/');
         if (isDirQuery && text.endsWith('/')) {
             delay = 0; 
         }
@@ -625,6 +636,8 @@ class GnomeLensSearchBar extends St.BoxLayout {
                     this._lastText = newText;
                     this._autocompleteActive = true;
                     this._isClearing = false;
+
+                    this._updateButtonVisibility(newText);
                 }
             } catch (e) { }
         });
@@ -715,6 +728,8 @@ class GnomeLensSearchBar extends St.BoxLayout {
         this._lastText = text;
         this._isClearing = false;
         
+        this._updateButtonVisibility(text);
+
         if (text.length > 0) {
             if (this._setQueryIdleId > 0) {
                 GLib.source_remove(this._setQueryIdleId);

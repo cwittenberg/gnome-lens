@@ -306,7 +306,7 @@ export const GnomeLensUI = GObject.registerClass({
         }
 
         let ext = result.filepath.split('.').pop().toLowerCase();
-        let isVideo = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv'].includes(ext);
+        let isVideo = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'mpg', 'wmv', 'mpeg'].includes(ext);
         let isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext);
 
         if (isVideo || isImage) {
