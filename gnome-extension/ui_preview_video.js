@@ -322,6 +322,8 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     scrub(offsetSeconds) {
+        this._resetHideTimer();
+
         if (this._pipeline) {
             let pos;
             // Base the next target on our intended seek time to avoid snapping 
@@ -349,6 +351,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     seekToPercentage(percentage) {
+        this._resetHideTimer();
         if (this._durationNs <= 0) return;
         let targetNs = Math.floor(this._durationNs * percentage);
         
@@ -363,6 +366,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     setVolumeLevel(volume) {
+        this._resetHideTimer();
         this._volumeLevel = Math.max(0.0, Math.min(1.0, volume));
         if (this._pipeline && !this._isMuted) {
             this._pipeline.set_property('volume', this._volumeLevel);
@@ -371,6 +375,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
     }
 
     toggleMute() {
+        this._resetHideTimer();
         this._isMuted = !this._isMuted;
         if (this._pipeline) {
             this._pipeline.set_property('volume', this._isMuted ? 0.0 : this._volumeLevel);

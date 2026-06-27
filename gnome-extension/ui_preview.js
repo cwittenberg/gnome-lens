@@ -25,6 +25,7 @@ export const GnomeLensPreview = GObject.registerClass({
         this._filepath = null;
         this._type = null;
         this._activeStrategy = null;
+        this._lastClickTime = 0;
 
         let w = this._settings.get_int('preview-w');
         let h = this._settings.get_int('preview-h');
@@ -61,8 +62,6 @@ export const GnomeLensPreview = GObject.registerClass({
                 } else if (direction === Clutter.ScrollDirection.DOWN) {
                     delta = -5;
                 } else if (direction === Clutter.ScrollDirection.SMOOTH) {
-                    // FIX: Clutter.Event does not expose a native get_scroll_deltas() method binding in GJS.
-                    // Instead, we use the correct GObject property event.get_scroll_delta() which returns [dx, dy].
                     let [dx, dy] = event.get_scroll_delta();
                     if (dy !== 0) {
                         delta = -dy * 5; 
@@ -101,7 +100,6 @@ export const GnomeLensPreview = GObject.registerClass({
         this.isFullscreen = false;
         this._preFsGeom = { x: 0, y: 0, w: 0, h: 0 };
 
-        // Handle dragging directly on the component via safe internal pointer propagation tracking
         this.connectObject(
             'button-press-event', (actor, event) => {
                 if (event.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
@@ -118,9 +116,14 @@ export const GnomeLensPreview = GObject.registerClass({
                     current = current.get_parent();
                 }
 
-                if (event.get_click_count() === 2 && !isControl) {
-                    this.toggleFullscreen();
-                    return Clutter.EVENT_STOP;
+                if (!isControl) {
+                    let clickTime = event.get_time();
+                    if (clickTime - this._lastClickTime < 250) {
+                        this.toggleFullscreen();
+                        this._lastClickTime = 0;
+                        return Clutter.EVENT_STOP;
+                    }
+                    this._lastClickTime = clickTime;
                 }
 
                 if (!isControl && !this.isFullscreen) {
