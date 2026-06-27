@@ -4,7 +4,7 @@
     background-color: #0B0B1A !important;
     border: 1px solid #00F0FF !important;
     border-radius: 0px !important;
-    box-shadow: 8px 8px 0px rgba(255, 0, 60, 0.4) !important; /* Aggressive offset shadow */
+    box-shadow: 8px 8px 0px rgba(255, 0, 60, 0.4) !important;
 }
 
 .lens-search-icon { color: #FCE205 !important; }
@@ -113,3 +113,12 @@
     border-radius: 0px !important;
     text-transform: uppercase !important;
 }
+
+/* ========================================================================
+ * VIDEO PLAYER THEME OVERRIDES
+ * ======================================================================== */
+.lens-slider-fill { background-color: #FCE205 !important; border-radius: 0px !important; }
+.lens-volume-fill { background-color: #00F0FF !important; border-radius: 0px !important; }
+.lens-slider-track, .lens-volume-slider { border-radius: 0px !important; background-color: rgba(0, 240, 255, 0.2) !important; }
+.lens-video-control-btn { border-radius: 0px !important; }
+.lens-video-control-btn:hover { background-color: #FF003C !important; color: #FFFFFF !important; }

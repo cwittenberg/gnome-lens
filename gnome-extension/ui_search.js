@@ -342,6 +342,33 @@ class GnomeLensSearchBar extends St.BoxLayout {
         this._lastText = '';
         this._autocompleteActive = false;
 
+        this._backButton = new St.Button({
+            style_class: 'lens-clear-button',
+            child: new St.Icon({ icon_name: 'go-previous-symbolic', icon_size: 20 }),
+            y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
+            can_focus: true,
+        });
+        this._backButton.connectObject('button-press-event', () => {
+            if (this.callbacks.onBack) this.callbacks.onBack();
+            return Clutter.EVENT_STOP;
+        }, this);
+        this.add_child(this._backButton);
+
+        this._upButton = new St.Button({
+            style_class: 'lens-clear-button',
+            child: new St.Icon({ icon_name: 'go-up-symbolic', icon_size: 20 }),
+            y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
+            can_focus: true,
+            visible: false,
+        });
+        this._upButton.connectObject('button-press-event', () => {
+            this._navigateUpDirectory();
+            return Clutter.EVENT_STOP;
+        }, this);
+        this.add_child(this._upButton);
+
         this._searchIcon = new St.Icon({
             icon_name: 'system-search-symbolic',
             icon_size: 24,
@@ -414,6 +441,40 @@ class GnomeLensSearchBar extends St.BoxLayout {
             return Clutter.EVENT_STOP;
         }, this);
         this.add_child(this._closeButton);
+
+        this._settings.connectObject('changed::search-history', this._updateBackButtonVisibility.bind(this), this);
+        this._updateBackButtonVisibility();
+    }
+
+    _updateBackButtonVisibility() {
+        let history = this._settings.get_strv('search-history') || [];
+        this._backButton.visible = history.length > 0;
+    }
+
+    _navigateUpDirectory() {
+        let text = this._entry.get_text();
+        if (text.startsWith('/') || text.startsWith('~/')) {
+            let normalized = text;
+            if (normalized.endsWith('/') && normalized.length > 1) {
+                normalized = normalized.slice(0, -1);
+            }
+            let lastSlash = normalized.lastIndexOf('/');
+            let newText = '';
+            
+            if (lastSlash > 0) {
+                newText = normalized.substring(0, lastSlash + 1);
+            } else if (lastSlash === 0) {
+                newText = '/';
+            } else if (normalized.startsWith('~') && lastSlash === -1) {
+                newText = '~/';
+            }
+            
+            if (newText.length > 0 && newText !== text) {
+                this.setQuery(newText, false);
+                if (this.callbacks.onSearch) this.callbacks.onSearch(newText);
+            }
+            this.grabFocus();
+        }
     }
 
     _onTextChanged() {
@@ -423,6 +484,9 @@ class GnomeLensSearchBar extends St.BoxLayout {
         this._autocompleteActive = false; // Reset intercept flag if user typed
 
         this._clearButton.visible = text.length > 0;
+
+        let isDirQuery = text.startsWith('/') || text.startsWith('~/');
+        this._upButton.visible = isDirQuery && text !== '/' && text !== '~/' && text !== '~';
 
         let cursorPos = this._entry.clutter_text.get_cursor_position();
 
@@ -504,10 +568,9 @@ class GnomeLensSearchBar extends St.BoxLayout {
         }
 
         let delay = 350;
-        let isDirQuery = (text.startsWith('/') || text.startsWith('~/')) && text.endsWith('/');
         
         // Instant search when they type a trailing slash for a directory
-        if (isDirQuery) {
+        if (isDirQuery && text.endsWith('/')) {
             delay = 0; 
         }
 
@@ -573,6 +636,7 @@ class GnomeLensSearchBar extends St.BoxLayout {
 
     _onKeyPress(actor, event) {
         let symbol = event.get_key_symbol();
+        let state = event.get_state();
         let text = this._entry.get_text();
         let len = text.length;
 
@@ -603,6 +667,15 @@ class GnomeLensSearchBar extends St.BoxLayout {
             if (this.callbacks.onClose) this.callbacks.onClose();
             return Clutter.EVENT_STOP;
         }
+
+        // Add Alt+Up for directory navigation
+        if (symbol === Clutter.KEY_Up && (state & Clutter.ModifierType.MOD1_MASK)) {
+            if (this._upButton.visible) {
+                this._navigateUpDirectory();
+                return Clutter.EVENT_STOP;
+            }
+        }
+
         if (symbol === Clutter.KEY_Down) {
             if (this.callbacks.onNavigateDown) this.callbacks.onNavigateDown();
             return Clutter.EVENT_STOP;

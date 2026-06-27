@@ -40,6 +40,20 @@ class GnomeLensResultsList extends St.ScrollView {
 
     _onKeyPressEvent(actor, keyEvent) {
         let symbol = keyEvent.get_key_symbol();
+        
+        // INTERCEPT: If a video preview is active, pass arrow keys down instead of swallowing them
+        if (symbol === Clutter.KEY_Right) {
+            if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
+                if (this.callbacks.onScrub) this.callbacks.onScrub(5);
+                return Clutter.EVENT_STOP;
+            }
+        } else if (symbol === Clutter.KEY_Left) {
+            if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
+                if (this.callbacks.onScrub) this.callbacks.onScrub(-5);
+                return Clutter.EVENT_STOP;
+            }
+        }
+
         if (symbol === Clutter.KEY_Down) {
             this.selectNext();
             return Clutter.EVENT_STOP;
@@ -53,16 +67,6 @@ class GnomeLensResultsList extends St.ScrollView {
         } else if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
             this.launchSelected();
             return Clutter.EVENT_STOP;
-        } else if (symbol === Clutter.KEY_Right) {
-            if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
-                if (this.callbacks.onScrub) this.callbacks.onScrub(5);
-                return Clutter.EVENT_STOP;
-            }
-        } else if (symbol === Clutter.KEY_Left) {
-            if (this.callbacks.isPreviewVideoActive && this.callbacks.isPreviewVideoActive()) {
-                if (this.callbacks.onScrub) this.callbacks.onScrub(-5);
-                return Clutter.EVENT_STOP;
-            }
         }
         return Clutter.EVENT_PROPAGATE;
     }
@@ -104,9 +108,35 @@ class GnomeLensResultsList extends St.ScrollView {
         }
     }
 
+    _getExt(r) {
+        if (r.metadata && r.metadata.filetype) {
+            return r.metadata.filetype.toLowerCase();
+        } else if (r.filepath) {
+            let parts = r.filepath.split('.');
+            if (parts.length > 1) {
+                return parts.pop().toLowerCase();
+            }
+        }
+        return '';
+    }
+
+    _isFolderResult(r) {
+        let ext = this._getExt(r);
+        return ['directory', 'folder', 'inode/directory'].includes(ext) || r.plugin_id === 'plugin:folder' || r.plugin_id === 'plugin:directory';
+    }
+
     launchSelected() {
         if (this._selectedIndex >= 0 && this._selectedIndex < this._results.length) {
-            if (this.callbacks.onLaunch) this.callbacks.onLaunch(this._results[this._selectedIndex]);
+            let res = this._results[this._selectedIndex];
+            if (this._isFolderResult(res)) {
+                if (this.callbacks.onExploreFolder) {
+                    this.callbacks.onExploreFolder(res.filepath);
+                } else if (this.callbacks.onLaunch) {
+                    this.callbacks.onLaunch(res);
+                }
+            } else {
+                if (this.callbacks.onLaunch) this.callbacks.onLaunch(res);
+            }
         }
     }
 
@@ -259,27 +289,10 @@ class GnomeLensResultsList extends St.ScrollView {
 
         this.clear();
         
-        let getExt = (r) => {
-            if (r.metadata && r.metadata.filetype) {
-                return r.metadata.filetype.toLowerCase();
-            } else if (r.filepath) {
-                let parts = r.filepath.split('.');
-                if (parts.length > 1) {
-                    return parts.pop().toLowerCase();
-                }
-            }
-            return '';
-        };
-
-        let isFolderResult = (r) => {
-            let ext = getExt(r);
-            return ['directory', 'folder', 'inode/directory'].includes(ext) || r.plugin_id === 'plugin:folder' || r.plugin_id === 'plugin:directory';
-        };
-
         let getGroup = (r) => {
-            if (isFolderResult(r)) return 0;
+            if (this._isFolderResult(r)) return 0;
             if (r.plugin_id === 'plugin:app_launcher' || r.plugin_id === 'plugin:math') return 1;
-            if (r.plugin_id === 'plugin:email' || getExt(r) === 'eml') return 2;
+            if (r.plugin_id === 'plugin:email' || this._getExt(r) === 'eml') return 2;
             if (r.metadata && r.metadata.shallow_index === 'true') return 4;
             return 3;
         };
@@ -343,8 +356,8 @@ class GnomeLensResultsList extends St.ScrollView {
 
         for (let i = 0; i < maxRender; i++) {
             let res = this._results[i];
-            let ext = getExt(res);
-            let isFolder = isFolderResult(res);
+            let ext = this._getExt(res);
+            let isFolder = this._isFolderResult(res);
             let group = getGroup(res);
             let isEmail = res.plugin_id === 'plugin:email' || ext === 'eml';
             
@@ -378,7 +391,15 @@ class GnomeLensResultsList extends St.ScrollView {
             });
 
             itemBox.connectObject('button-press-event', () => {
-                if (this.callbacks.onLaunch) this.callbacks.onLaunch(res);
+                if (isFolder) {
+                    if (this.callbacks.onExploreFolder) {
+                        this.callbacks.onExploreFolder(res.filepath);
+                    } else if (this.callbacks.onLaunch) {
+                        this.callbacks.onLaunch(res);
+                    }
+                } else {
+                    if (this.callbacks.onLaunch) this.callbacks.onLaunch(res);
+                }
                 return Clutter.EVENT_STOP;
             }, this);
 

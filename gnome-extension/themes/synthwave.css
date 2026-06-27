@@ -142,3 +142,16 @@
     border-radius: 8px !important;
     font-weight: 800 !important;
 }
+
+/* ========================================================================
+ * VIDEO PLAYER THEME OVERRIDES
+ * ======================================================================== */
+.lens-slider-fill { 
+    background-image: linear-gradient(to right, #ff007f, #b92b27) !important; 
+    background-color: transparent !important; 
+}
+.lens-volume-fill { background-color: #00f3ff !important; }
+.lens-video-control-btn:hover { 
+    background-color: rgba(255, 0, 127, 0.2) !important; 
+    color: #00f3ff !important; 
+}

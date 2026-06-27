@@ -118,7 +118,7 @@
 }
 
 .lens-result-ai-reasoning, .lens-status-label { 
-    color: #ffcc00 !important; /* Warning Yellow */ 
+    color: #ffcc00 !important; 
     font-weight: bold !important;
 }
 
@@ -154,3 +154,10 @@
     text-transform: uppercase !important;
     font-weight: bold !important;
 }
+
+/* ========================================================================
+ * VIDEO PLAYER THEME OVERRIDES
+ * ======================================================================== */
+.lens-slider-fill { background-color: #ff0000 !important; box-shadow: 0px 0px 10px rgba(255, 0, 0, 0.5) !important; }
+.lens-volume-fill { background-color: #ff9999 !important; }
+.lens-video-control-btn:hover { background-color: rgba(255, 0, 0, 0.3) !important; color: #ff0000 !important; }

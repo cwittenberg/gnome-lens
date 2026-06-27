@@ -173,6 +173,15 @@ export const GnomeLensUI = GObject.registerClass({
             onSearch: (text) => {
                 this._triggerBackendSearch(text);
             },
+            onBack: () => {
+                let history = this._settings.get_strv('search-history') || [];
+                if (history.length > 0) {
+                    if (this._historyIndex < history.length - 1) {
+                        this._historyIndex++;
+                    }
+                    this._loadHistoryAt(this._historyIndex);
+                }
+            },
             onNavigateUp: () => {
                 if (this._resultsList.getSelectedIndex() > 0) {
                     this._resultsList.selectPrev();
@@ -243,6 +252,21 @@ export const GnomeLensUI = GObject.registerClass({
 
         this._resultsList = new GnomeLensResultsList(this._settings, {
             onLaunch: (result, action) => this._launchResult(result, action),
+            onExploreFolder: (path) => {
+                if (path) {
+                    let home = GLib.get_home_dir();
+                    let displayPath = path;
+                    if (displayPath.startsWith(home)) {
+                        displayPath = '~' + displayPath.substring(home.length);
+                    }
+                    if (!displayPath.endsWith('/')) {
+                        displayPath += '/';
+                    }
+                    this._searchBar.setQuery(displayPath, false);
+                    this._searchBar.grabFocus();
+                    this._triggerBackendSearch(displayPath);
+                }
+            },
             onSelect: (result) => this._onResultSelected(result),
             onFocusSearch: () => this._searchBar.grabFocus(),
             isPreviewVideoActive: () => {

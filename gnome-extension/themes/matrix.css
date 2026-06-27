@@ -109,3 +109,12 @@
     border-radius: 0px !important;
     font-family: monospace !important;
 }
+
+/* ========================================================================
+ * VIDEO PLAYER THEME OVERRIDES
+ * ======================================================================== */
+.lens-slider-fill { background-color: #00FF41 !important; border-radius: 0px !important; }
+.lens-volume-fill { background-color: #008F11 !important; border-radius: 0px !important; }
+.lens-slider-track, .lens-volume-slider { border-radius: 0px !important; border: 1px solid #008F11 !important; background-color: #000000 !important; }
+.lens-video-control-btn { border-radius: 0px !important; }
+.lens-video-control-btn:hover { background-color: rgba(0, 255, 65, 0.2) !important; color: #00FF41 !important; }

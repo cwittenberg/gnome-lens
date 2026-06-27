@@ -7,17 +7,19 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { GnomeLensImagePreview } from './ui_preview_image.js';
 import { GnomeLensVideoPreview } from './ui_preview_video.js';
 
-const GnomeLensPreview = GObject.registerClass({
+export const GnomeLensPreview = GObject.registerClass({
     GTypeName: 'GnomeLensPreview'
 }, class GnomeLensPreview extends St.Widget {
     _init(settings) {
         super._init({
             reactive: true,
-            can_focus: false,
+            can_focus: true,
             visible: false,
             clip_to_allocation: true,
             style_class: 'lens-dialog lens-preview-dialog'
         });
+
+        this.set_layout_manager(new Clutter.BinLayout());
 
         this._settings = settings;
         this._filepath = null;
@@ -41,75 +43,124 @@ const GnomeLensPreview = GObject.registerClass({
 
         this._buildUI();
 
-        this.connectObject('button-press-event', () => {
-            return Clutter.EVENT_STOP;
+        // Halt native backdrop-injection propagation
+        this.connectObject('button-press-event', () => Clutter.EVENT_STOP, this);
+
+        // Explicitly intercept scroll-events at the parent root container level
+        this.connectObject('scroll-event', (actor, event) => {
+            if (this.isVideo() && this._activeStrategy) {
+                let direction = event.get_scroll_direction();
+                let delta = 0;
+                
+                if (direction === Clutter.ScrollDirection.UP) {
+                    delta = 5;
+                } else if (direction === Clutter.ScrollDirection.DOWN) {
+                    delta = -5;
+                } else if (direction === Clutter.ScrollDirection.SMOOTH) {
+                    let [dx, dy] = event.get_scroll_deltas();
+                    if (dy !== 0) {
+                        // Accumulate continuous smooth scroll events proportionally 
+                        // rather than fixed 5s jumps to prevent over-seeking
+                        delta = -dy * 5; 
+                    }
+                }
+
+                if (delta !== 0) {
+                    this._activeStrategy.scrub(delta);
+                    return Clutter.EVENT_STOP;
+                }
+            }
+            return Clutter.EVENT_PROPAGATE;
         }, this);
     }
 
     _buildUI() {
-        this._layout = new St.BoxLayout({ vertical: true, x_expand: true, y_expand: true });
-
-        this._header = new St.BoxLayout({
-            style_class: 'lens-preview-header',
-            reactive: true,
-            x_expand: true,
-            y_align: Clutter.ActorAlign.START
-        });
-
-        let title = new St.Label({ text: 'Media Preview', style_class: 'lens-preview-title', x_expand: true });
-        this._header.add_child(title);
-        this._layout.add_child(this._header);
-
-        this._contentBox = new St.BoxLayout({
-            style_class: 'lens-preview-content',
+        this._contentBox = new St.Widget({
             x_expand: true,
             y_expand: true,
             x_align: Clutter.ActorAlign.FILL,
             y_align: Clutter.ActorAlign.FILL
         });
-
-        this._layout.add_child(this._contentBox);
+        this._contentBox.set_layout_manager(new Clutter.BinLayout());
+        this.add_child(this._contentBox);
         
         this._resizeHandle = new St.Widget({
             style_class: 'lens-preview-resize-handle',
             reactive: true,
-            width: 20, height: 20
+            width: 20, height: 20,
+            x_expand: true, y_expand: true,
+            x_align: Clutter.ActorAlign.END,
+            y_align: Clutter.ActorAlign.END
         });
-
-        this.add_child(this._layout);
         this.add_child(this._resizeHandle);
-
-        this.connectObject('notify::width', () => this._updateHandlePos(), this);
-        this.connectObject('notify::height', () => this._updateHandlePos(), this);
-        this._updateHandlePos();
 
         let dragging = false;
         let startX, startY, startWinX, startWinY;
-        
-        this._header.connectObject('button-press-event', (actor, event) => {
-            dragging = true;
-            let [x, y] = event.get_coords();
-            startX = x; startY = y;
-            startWinX = this.x; startWinY = this.y;
-            return Clutter.EVENT_STOP;
-        }, this);
-        
-        this._header.connectObject('motion-event', (actor, event) => {
-            if (!dragging) return Clutter.EVENT_PROPAGATE;
-            let [x, y] = event.get_coords();
-            this.set_position(startWinX + (x - startX), startWinY + (y - startY));
-            return Clutter.EVENT_STOP;
-        }, this);
-        
-        this._header.connectObject('button-release-event', () => {
-            dragging = false;
-            this._saveGeometry();
-            return Clutter.EVENT_STOP;
+        this.isFullscreen = false;
+        this._preFsGeom = { x: 0, y: 0, w: 0, h: 0 };
+
+        this.connectObject('captured-event', (actor, event) => {
+            let type = event.type();
+            let source = event.get_source();
+            
+            // Centralized HUD wake-up: intercept all interactions over the window and wake the video HUD
+            if (this.isVideo() && this._activeStrategy && typeof this._activeStrategy._resetHideTimer === 'function') {
+                if (type === Clutter.EventType.MOTION || type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.SCROLL) {
+                    this._activeStrategy._resetHideTimer();
+                }
+            }
+            
+            // Refined drag interception check: only restrict drag if the click landed explicitly on control HUD sub-widgets
+            let isControl = false;
+            let current = source;
+            while (current && current !== this) {
+                let cls = current.get_style_class_name ? current.get_style_class_name() : '';
+                if (cls && (cls.includes('hud') || cls.includes('resize-handle') || cls.includes('btn') || cls.includes('slider') || cls.includes('track') || cls.includes('fill'))) {
+                    isControl = true;
+                    break;
+                }
+                current = current.get_parent();
+            }
+
+            if (type === Clutter.EventType.BUTTON_PRESS) {
+                if (event.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
+
+                if (event.get_click_count() === 2 && !isControl) {
+                    dragging = false;
+                    this.toggleFullscreen();
+                    return Clutter.EVENT_STOP;
+                }
+
+                if (!isControl && !this.isFullscreen) {
+                    dragging = true;
+                    let [x, y] = event.get_coords();
+                    startX = x; startY = y;
+                    startWinX = this.x; startWinY = this.y;
+                    
+                    // Propagate the press down to the window boundary so Clutter establishes 
+                    // an implicit grab on this parent window, securing reliable drags.
+                    return Clutter.EVENT_PROPAGATE;
+                }
+            } else if (type === Clutter.EventType.MOTION) {
+                if (dragging) {
+                    let [x, y] = event.get_coords();
+                    this.set_position(startWinX + (x - startX), startWinY + (y - startY));
+                    return Clutter.EVENT_STOP;
+                }
+            } else if (type === Clutter.EventType.BUTTON_RELEASE) {
+                if (dragging) {
+                    dragging = false;
+                    this._saveGeometry();
+                    return Clutter.EVENT_STOP;
+                }
+            }
+            return Clutter.EVENT_PROPAGATE;
         }, this);
 
         let resizing = false;
         let startW, startH;
         this._resizeHandle.connectObject('button-press-event', (actor, event) => {
+            if (this.isFullscreen) return Clutter.EVENT_STOP;
             resizing = true;
             let [x, y] = event.get_coords();
             startX = x; startY = y;
@@ -127,18 +178,30 @@ const GnomeLensPreview = GObject.registerClass({
         }, this);
         
         this._resizeHandle.connectObject('button-release-event', () => {
-            resizing = false;
-            this._saveGeometry();
+            if (resizing) {
+                resizing = false;
+                this._saveGeometry();
+            }
             return Clutter.EVENT_STOP;
         }, this);
     }
 
-    _updateHandlePos() {
-        this._resizeHandle.set_position(this.width - 20, this.height - 20);
-        this._layout.set_size(this.width, this.height);
+    toggleFullscreen() {
+        if (this.isFullscreen) {
+            this.set_position(this._preFsGeom.x, this._preFsGeom.y);
+            this.set_size(this._preFsGeom.w, this._preFsGeom.h);
+            this.isFullscreen = false;
+        } else {
+            this._preFsGeom = { x: this.x, y: this.y, w: this.width, h: this.height };
+            let monitor = Main.layoutManager.primaryMonitor;
+            this.set_position(monitor.x, monitor.y);
+            this.set_size(monitor.width, monitor.height);
+            this.isFullscreen = true;
+        }
     }
 
     _saveGeometry() {
+        if (this.isFullscreen) return;
         this._settings.set_int('preview-x', this.x);
         this._settings.set_int('preview-y', this.y);
         this._settings.set_int('preview-w', this.width);
@@ -156,8 +219,13 @@ const GnomeLensPreview = GObject.registerClass({
     }
 
     showFile(filepath, type) {
-        console.log(`[Gnome Lens Debug] showFile called for: ${filepath} [${type}]`);
         if (this._filepath === filepath && this.visible) return;
+        
+        // Before clearing active state, tell the strategy to instantly save position
+        if (this._activeStrategy && typeof this._activeStrategy.saveCurrentPosition === 'function') {
+            this._activeStrategy.saveCurrentPosition();
+        }
+
         this._filepath = filepath;
         this._type = type;
 
@@ -188,6 +256,10 @@ const GnomeLensPreview = GObject.registerClass({
     }
 
     hide() {
+        if (this._activeStrategy && typeof this._activeStrategy.saveCurrentPosition === 'function') {
+            this._activeStrategy.saveCurrentPosition();
+        }
+
         this.visible = false;
         this._filepath = null;
         this._type = null;
@@ -207,5 +279,3 @@ const GnomeLensPreview = GObject.registerClass({
         super.destroy();
     }
 });
-
-export { GnomeLensPreview };

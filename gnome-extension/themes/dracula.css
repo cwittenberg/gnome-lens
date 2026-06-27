@@ -104,3 +104,10 @@
     color: #50fa7b !important;
     border-radius: 8px !important;
 }
+
+/* ========================================================================
+ * VIDEO PLAYER THEME OVERRIDES
+ * ======================================================================== */
+.lens-slider-fill { background-color: #bd93f9 !important; }
+.lens-volume-fill { background-color: #8be9fd !important; }
+.lens-video-control-btn:hover { background-color: #44475a !important; color: #ff79c6 !important; }
