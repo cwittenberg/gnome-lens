@@ -30,8 +30,8 @@ export function buildAboutPage(prefs) {
     const group = new Adw.PreferencesGroup();
 
     const titleRow = new Adw.ActionRow({
-        title: 'Gnome Lens',
-        subtitle: 'Spotlight-alike intelligent search utilizing the local Gnome Lens Service.',
+        title: 'Lens for Gnome',
+        subtitle: 'Spotlight-alike intelligent search ensuring you can find locally what you need.',
     });
     group.add(titleRow);
 

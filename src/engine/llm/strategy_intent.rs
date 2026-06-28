@@ -1,5 +1,4 @@
 // src/engine/llm/strategy_intent.rs
-// FIX: Removed assistant prefill; increased token limits for reasoning headroom.
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use super::{LlmStrategy, LlmCore};
@@ -70,6 +69,8 @@ impl LlmStrategy for IntentStrategy {
             return LlmIntent::Skip;
         }
 
+        let cot_bypass = if core.supports_cot { "<think>\n</think>\n" } else { "" };
+
         let prompt = format!(
             "<|im_start|>system\nYou are a strict routing API. Output ONLY a single digit. Thinking, reasoning, or dialogue are strictly FORBIDDEN.<|im_end|>\n\
             <|im_start|>user\n\
@@ -87,8 +88,8 @@ impl LlmStrategy for IntentStrategy {
             Query:\n\
             [{}]\n\
             <|im_end|>\n\
-            <|im_start|>assistant\n<think>\n</think>\n",
-            query
+            <|im_start|>assistant\n{}",
+            query, cot_bypass
         );
 
         let response = core.generate_text("INTENT_STRATEGY", &prompt, 150, is_cancelled);

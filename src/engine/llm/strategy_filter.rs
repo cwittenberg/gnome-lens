@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::domain::SearchResult;
 use super::{LlmStrategy, LlmCore, extract_relevant_window};
 
+#[allow(dead_code)]
 pub struct FastFilterStrategy;
 
 impl LlmStrategy for FastFilterStrategy {

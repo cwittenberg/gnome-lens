@@ -377,13 +377,22 @@ impl SystemRouter {
                             
                             let eval_result = self.llm.evaluate_script_logic(&search_query.raw_text, &generated_script, schema_keys.clone(), Arc::clone(&is_cancelled));
                             
-                            if eval_result == "APPROVE" {
+                            if eval_result.starts_with("APPROVE") {
                                 println!("[Router DEBUG] Script Logic Approved by Critic on attempt {}", attempt);
                                 final_ast = Some(ast);
                                 break;
                             } else {
-                                println!("[Router DEBUG] Script logic rejected by Critic. Retrying with revised script...");
-                                generated_script = eval_result;
+                                let feedback = eval_result.replace("DENY |", "").trim().to_string();
+                                println!("[Router DEBUG] Script logic rejected by Critic. Feedback: {}", feedback);
+                                send_chunk(serde_json::json!({"status": "filtering", "message": format!("Applying Critic feedback (Attempt {})...", attempt)}).to_string());
+                                
+                                generated_script = self.llm.fix_script_syntax(
+                                    &search_query.raw_text, 
+                                    &generated_script, 
+                                    &format!("Critic rejected the logic with this feedback: {}", feedback), 
+                                    schema_keys.clone(), 
+                                    Arc::clone(&is_cancelled)
+                                );
                                 attempt += 1;
                             }
                         },

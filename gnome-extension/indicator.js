@@ -9,7 +9,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 export const GnomeLensIndicator = GObject.registerClass(
     class GnomeLensIndicator extends PanelMenu.Button {
         _init(extension, settings) {
-            super._init(0.0, 'Gnome Lens', false);
+            super._init(0.0, 'Lens for GNOME', false);
 
             this._extension = extension;
             this._settings = settings;

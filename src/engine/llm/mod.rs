@@ -1,5 +1,6 @@
 // src/engine/llm/mod.rs
 
+pub mod strategy_filter;
 pub mod strategy_intent;
 pub mod strategy_temporal;
 pub mod strategy_synthesis;
@@ -18,6 +19,7 @@ use crate::domain::{SearchQuery, SearchResult};
 use crate::engine::model_manager::ModelManager;
 use crate::engine::HardwareManager;
 
+pub use strategy_filter::FastFilterStrategy;
 pub use strategy_intent::{LlmIntent, IntentStrategy};
 pub use strategy_temporal::TemporalStrategy;
 pub use strategy_synthesis::SynthesisStrategy;
@@ -32,6 +34,7 @@ pub trait LlmStrategy {
 pub struct LlmCore {
     pub backend: LlamaBackend,
     pub model: LlamaModel,
+    pub supports_cot: bool,
 }
 
 impl LlmCore {
@@ -39,7 +42,7 @@ impl LlmCore {
         println!("Initializing llama.cpp Backend...");
         
         let backend = LlamaBackend::init().expect("Failed to initialize C++ backend");
-        let (model_path, model_url) = ModelManager::get_active_model_path_and_url();
+        let (model_path, model_url, supports_cot) = ModelManager::get_active_model_details();
         
         ModelManager::ensure_model_available(&model_path, &model_url);
 
@@ -53,7 +56,7 @@ impl LlmCore {
         let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
             .unwrap_or_else(|_| panic!("Failed to load GGUF model from {}.", model_path));
 
-        Self { backend, model }
+        Self { backend, model, supports_cot }
     }
 
     pub fn generate_text(&self, strategy_name: &str, prompt: &str, max_tokens: usize, is_cancelled: Arc<AtomicBool>) -> String {
@@ -317,6 +320,11 @@ impl LlmService {
         let model_path = ModelManager::download_model_if_needed(model_id, send_chunk, is_cancelled)?;
         send_chunk(serde_json::json!({"status": "processing", "message": "Loading model into memory..."}).to_string());
         
+        let parsed = ModelManager::setup_model_config();
+        let supports_cot = parsed["models"][model_id]["supports_cot"]
+            .as_bool()
+            .unwrap_or_else(|| model_id.to_lowercase().contains("qwen"));
+            
         let mut engine_guard = self.engine.lock().unwrap();
         let n_gpu = HardwareManager::get_optimal_gpu_layers();
         
@@ -325,6 +333,7 @@ impl LlmService {
         
         ModelManager::set_active_model(model_id)?;
         engine_guard.model = new_model;
+        engine_guard.supports_cot = supports_cot;
 
         Ok(())
     }
@@ -371,7 +380,16 @@ impl LlmService {
         if !clean.is_empty() { query.raw_text = clean; }
     }
 
+    #[allow(dead_code)]
+    pub fn apply_fast_filter(&self, condition: &str, candidates: Vec<SearchResult>, is_cancelled: Arc<AtomicBool>) -> Vec<SearchResult> {
+        let strategy = FastFilterStrategy;
+        let core = self.engine.lock().unwrap();
+        strategy.execute(&core, (condition.to_string(), candidates), is_cancelled)
+    }
+
     pub fn extract_core_concept(&self, query: &str, is_cancelled: Arc<AtomicBool>) -> String {
+        let core = self.engine.lock().unwrap();
+        let cot_bypass = if core.supports_cot { "<think>\n</think>\n" } else { "" };
         let prompt = format!(
             "<|im_start|>system\nYou are a search engine keyword extractor. Extract ONLY the core factual subject nouns from the question. Ignore all conversational words, verbs, and question phrasing. Output ONLY space-separated keywords.<|im_end|>\n\
             <|im_start|>user\n\
@@ -381,9 +399,8 @@ impl LlmService {
             Keywords: reset administrator password cisco router\n\n\
             Question: \"{}\"\n\
             <|im_end|>\n\
-            <|im_start|>assistant\n<think>\n</think>\n", query
+            <|im_start|>assistant\n{}", query, cot_bypass
         );
-        let core = self.engine.lock().unwrap();
         let response = core.generate_text("KEYWORD_EXTRACTION", &prompt, 150, is_cancelled);
 
         response.replace("Keywords:", "").trim().to_string()

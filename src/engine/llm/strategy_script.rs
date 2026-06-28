@@ -10,26 +10,6 @@ fn extract_prefilled_rhai(response: &str) -> String {
     response.split("```").next().unwrap_or(response).trim().to_string()
 }
 
-fn extract_rhai_block(response: &str) -> String {
-    let mut extracted = response.trim().to_string();
-    if let Some(start_idx) = extracted.find("```rhai") {
-        let content = &extracted[start_idx + 7..];
-        if let Some(end_idx) = content.find("```") {
-            extracted = content[..end_idx].trim().to_string();
-        } else {
-            extracted = content.trim().to_string();
-        }
-    } else if let Some(start_idx) = extracted.find("```") {
-        let content = &extracted[start_idx + 3..];
-        if let Some(end_idx) = content.find("```") {
-            extracted = content[..end_idx].trim().to_string();
-        } else {
-            extracted = content.trim().to_string();
-        }
-    }
-    extracted.trim().to_string()
-}
-
 pub struct ScriptCompilerStrategy;
 
 impl LlmStrategy for ScriptCompilerStrategy {
@@ -106,7 +86,7 @@ impl LlmStrategy for ScriptFixerStrategy {
         };
 
         let prompt = format!(
-            "<|im_start|>system\nYou are a strict Rust/Rhai debugging expert. Fix the syntax errors and return the corrected script. <think> tags are strictly forbidden.<|im_end|>\n\
+            "<|im_start|>system\nYou are a strict Rust/Rhai debugging expert. Fix the script based on the provided error or feedback. <think> tags are strictly forbidden.<|im_end|>\n\
             <|im_start|>user\n\
             Original User Query: \"{}\"\n\
             Available metadata fields: [{}]\n\
@@ -116,11 +96,11 @@ impl LlmStrategy for ScriptFixerStrategy {
             {}\n\
             ```\n\
             \n\
-            COMPILER ERROR:\n\
+            ERROR OR CRITIC FEEDBACK:\n\
             {}\n\
             \n\
             CRITICAL RULES:\n\
-            1. Fix the error directly. Do not change the underlying logic if it is sound.\n\
+            1. Fix the script directly based on the feedback. Do not change underlying logic if it is already sound.\n\
             2. The script must return a boolean value.\n\
             3. Output ONLY the fixed script.<|im_end|>\n\
             <|im_start|>assistant\n```rhai\n",
@@ -147,11 +127,14 @@ impl LlmStrategy for ScriptEvaluatorStrategy {
             schema_keys.join(", ")
         };
 
+        let cot_bypass = if core.supports_cot { "<think>\n</think>\n" } else { "" };
+
         let prompt = format!(
             "<|im_start|>system\nYou are a strict Quality Assurance reviewer evaluating an automated search script. Your job is to verify that the script logically matches the user's intent. <think> reasoning tags are strictly forbidden.<|im_end|>\n\
             <|im_start|>user\n\
             User Query: \"{}\"\n\
             Available metadata fields: [{}]\n\
+            Available global variables: [text, title]\n\
             \n\
             COMPILED SCRIPT (Syntax is verified correct):\n\
             ```rhai\n\
@@ -160,24 +143,23 @@ impl LlmStrategy for ScriptEvaluatorStrategy {
             \n\
             REVIEW CHECKLIST:\n\
             1. Does the script accurately reflect mathematical bounds (e.g., if the user asked for 'under 100', does the script use `< 100` and NOT `> 100`)?\n\
-            2. Does the script query hallucinated metadata fields that are NOT in the available fields list? (If a requested field doesn't exist, the script should use `regex_match(text, ...)` or `contains_ignore_case(text, ...)` instead of `metadata.fake_field`).\n\
+            2. Does the script query hallucinated metadata fields that are NOT in the available fields list? ('text' and 'title' are valid variables, NOT hallucinated fields).\n\
             3. Is the logic sound for achieving the user's explicit goal?\n\
             \n\
             IF THE SCRIPT IS PERFECT: Output exactly the word \"APPROVE\".\n\
-            IF THE SCRIPT HAS LOGICAL FLAWS: Output the corrected script in a ```rhai block.\n\
-            DO NOT USE ANY REASONING OR TEXT OUTSIDE OF THESE EXACT COMMANDS.<|im_end|>\n\
-            <|im_start|>assistant\n",
-            query, schema_str, compiled_script
+            IF THE SCRIPT HAS LOGICAL FLAWS: Output \"DENY | \" followed by a brief 1-sentence instruction on how to fix the logic.\n\
+            DO NOT output the corrected script. DO NOT use any reasoning outside of these exact commands.<|im_end|>\n\
+            <|im_start|>assistant\n{}",
+            query, schema_str, compiled_script, cot_bypass
         );
 
-        let response = core.generate_text("SCRIPT_EVALUATOR", &prompt, 1024, is_cancelled);
+        let response = core.generate_text("SCRIPT_EVALUATOR", &prompt, 256, is_cancelled);
         let clean_resp = response.trim();
         
-        // Match the raw output string without fuzzy extraction to prevent infinite failure loops
-        if clean_resp.contains("APPROVE") && !clean_resp.contains("REJECT") && !clean_resp.contains("```") {
-            return "APPROVE".to_string();
+        if clean_resp.starts_with("APPROVE") {
+            "APPROVE".to_string()
+        } else {
+            clean_resp.to_string()
         }
-
-        extract_rhai_block(clean_resp)
     }
 }

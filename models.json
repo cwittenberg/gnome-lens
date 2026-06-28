@@ -36,19 +36,7 @@
       "category": "fast-reasoning",
       "recommended": true,
       "description": "Fast, compact SLM optimized for RAG and function calling. Runs exceptionally well on Vulkan."
-    },
-    "phi-4-mini-q4-k-m": {
-      "name": "Phi 4 Mini",
-      "filename": "phi-4-mini-instruct-q4_k_m.gguf",
-      "url": "https://huggingface.co/matrixportalx/Phi-4-mini-instruct-Q4_K_M-GGUF/resolve/main/phi-4-mini-instruct-q4_k_m.gguf",
-      "size_gb": 2.5,
-      "ram_required_gb": 4.5,
-      "parameters": "3.8B",
-      "context_tokens": 131072,
-      "category": "fast-reasoning",
-      "recommended": true,
-      "description": "Compact Microsoft model with strong reasoning and coding ability for its size. Excellent alternative to Qwen3 4B when you want fast local reasoning."
-    },
+    },    
     "qwen2.5-coder-7b-q4-k-m": {
       "name": "Qwen 2.5 Coder (7B)",
       "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",

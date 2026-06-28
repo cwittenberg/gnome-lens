@@ -75,8 +75,8 @@ impl ModelManager {
         config
     }
 
-    /// Resolves the absolute path and URL of the currently active model.
-    pub fn get_active_model_path_and_url() -> (String, String) {
+    /// Resolves the absolute path, URL, and architecture flags of the currently active model.
+    pub fn get_active_model_details() -> (String, String, bool) {
         let parsed_config = Self::setup_model_config();
         let fallback_config = Self::default_model_config();
 
@@ -97,12 +97,16 @@ impl ModelManager {
 
         let url = model_obj["url"]
             .as_str()
-            .unwrap_or("https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf");
+            .unwrap_or("[https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf)");
+
+        let supports_cot = model_obj["supports_cot"]
+            .as_bool()
+            .unwrap_or_else(|| active_key.to_lowercase().contains("qwen"));
 
         let home = env::var("HOME").expect("HOME environment variable must be set");
         let model_path = format!("{}/.local/share/gnome-lens/models/{}", home, filename);
 
-        (model_path, url.to_string())
+        (model_path, url.to_string(), supports_cot)
     }
 
     /// Validates the model exists on disk, falling back to a blocking sync download.
@@ -309,109 +313,118 @@ impl ModelManager {
                 "qwen-2.5-3b": {
                     "name": "Qwen 2.5 (3B)",
                     "filename": "qwen2.5-3b-instruct-q4_k_m.gguf",
-                    "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+                    "url": "[https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf)",
                     "size_gb": 1.9,
                     "ram_required_gb": 2.8,
                     "parameters": "3.0B",
                     "context_tokens": 32768,
                     "category": "fastest",
                     "recommended": true,
+                    "supports_cot": true,
                     "description": "Fastest useful local model in this list. Good for quick local responses, translation, summarization, OCR cleanup, and small helper tasks."
                 },
                 "qwen3-4b-q4-k-m": {
                     "name": "Qwen 3 (4B)",
                     "filename": "Qwen3-4B-Q4_K_M.gguf",
-                    "url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
+                    "url": "[https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf)",
                     "size_gb": 2.6,
                     "ram_required_gb": 4.5,
                     "parameters": "4.0B",
                     "context_tokens": 32768,
                     "category": "recommended-default",
                     "recommended": true,
+                    "supports_cot": true,
                     "description": "Best fast and still accurate default model for this machine. Noticeably faster than 7B/8B models while staying much smarter than tiny 1B/2B models."
-                },
-                "phi-4-mini-q4-k-m": {
-                    "name": "Phi 4 Mini",
-                    "filename": "phi-4-mini-instruct-q4_k_m.gguf",
-                    "url": "https://huggingface.co/matrixportalx/Phi-4-mini-instruct-Q4_K_M-GGUF/resolve/main/phi-4-mini-instruct-q4_k_m.gguf",
-                    "size_gb": 2.5,
-                    "ram_required_gb": 4.5,
-                    "parameters": "3.8B",
-                    "context_tokens": 131072,
+                },             
+                "nemotron-mini-4b-q4-k-m": {
+                    "name": "NVIDIA Nemotron Mini 4B Instruct",
+                    "filename": "Nemotron-Mini-4B-Instruct-Q4_K_M.gguf",
+                    "url": "[https://huggingface.co/bartowski/Nemotron-Mini-4B-Instruct-GGUF/resolve/main/Nemotron-Mini-4B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Nemotron-Mini-4B-Instruct-GGUF/resolve/main/Nemotron-Mini-4B-Instruct-Q4_K_M.gguf)",
+                    "size_gb": 2.6,
+                    "ram_required_gb": 4.0,
+                    "parameters": "4.0B",
+                    "context_tokens": 4096,
                     "category": "fast-reasoning",
                     "recommended": true,
-                    "description": "Compact Microsoft model with strong reasoning and coding ability for its size. Excellent alternative to Qwen3 4B when you want fast local reasoning."
+                    "supports_cot": false,
+                    "description": "Fast, compact SLM optimized for RAG and function calling. Runs exceptionally well on Vulkan."
                 },
                 "qwen2.5-coder-7b-q4-k-m": {
                     "name": "Qwen 2.5 Coder (7B)",
                     "filename": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
-                    "url": "https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+                    "url": "[https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf)",
                     "size_gb": 4.68,
                     "ram_required_gb": 7.0,
                     "parameters": "7.0B",
                     "context_tokens": 32768,
                     "category": "coding",
                     "recommended": true,
+                    "supports_cot": true,
                     "description": "Fast coding-specialized model. Best practical local coding choice when speed still matters."
                 },
                 "qwen3-8b-q4-k-m": {
                     "name": "Qwen 3 (8B)",
                     "filename": "Qwen3-8B-Q4_K_M.gguf",
-                    "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+                    "url": "[https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf](https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf)",
                     "size_gb": 4.7,
                     "ram_required_gb": 7.0,
                     "parameters": "8.2B",
                     "context_tokens": 32768,
                     "category": "balanced-general",
                     "recommended": true,
+                    "supports_cot": true,
                     "description": "Stronger general-purpose model than Qwen3 4B. Good when quality matters more than raw speed."
                 },
                 "qwen2.5-coder-14b-q4-k-m": {
                     "name": "Qwen 2.5 Coder (14B)",
                     "filename": "qwen2.5-coder-14b-instruct-q4_k_m.gguf",
-                    "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/qwen2.5-coder-14b-instruct-q4_k_m.gguf",
+                    "url": "[https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/qwen2.5-coder-14b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/qwen2.5-coder-14b-instruct-q4_k_m.gguf)",
                     "size_gb": 8.9,
                     "ram_required_gb": 12.0,
                     "parameters": "14.7B",
                     "context_tokens": 32768,
                     "category": "serious-coding",
                     "recommended": true,
+                    "supports_cot": true,
                     "description": "Serious local coding model. Slower than 7B, but much stronger for code reasoning and multi-step fixes."
                 },
                 "qwen3-14b-q4-k-m": {
                     "name": "Qwen 3 (14B)",
                     "filename": "Qwen3-14B-Q4_K_M.gguf",
-                    "url": "https://huggingface.co/bartowski/Qwen_Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf",
+                    "url": "[https://huggingface.co/bartowski/Qwen_Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf)",
                     "size_gb": 9.0,
                     "ram_required_gb": 13.0,
                     "parameters": "14.8B",
                     "context_tokens": 32768,
                     "category": "large-general",
                     "recommended": true,
+                    "supports_cot": true,
                     "description": "Higher-quality Qwen3 option that still fits comfortably in 32 GB RAM. Good for reasoning when speed matters less."
                 },
                 "qwen3-coder-30b-a3b-ud-q4-k-xl": {
                     "name": "Qwen 3 Coder 30B-A3B",
                     "filename": "Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
-                    "url": "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
+                    "url": "[https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf](https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf)",
                     "size_gb": 17.7,
                     "ram_required_gb": 24.0,
                     "parameters": "30.5B total / 3.3B active",
                     "context_tokens": 32768,
                     "category": "heavy-coding",
                     "recommended": false,
+                    "supports_cot": true,
                     "description": "High-end local coding model. Realistic on a 32 GB machine, but heavy; expect slower startup and inference."
                 },
                 "devstral-small-2507-q4-k-m": {
                     "name": "Devstral Small 2507",
                     "filename": "Devstral-Small-2507-Q4_K_M.gguf",
-                    "url": "https://huggingface.co/mistralai/Devstral-Small-2507_gguf/resolve/main/Devstral-Small-2507-Q4_K_M.gguf",
+                    "url": "[https://huggingface.co/mistralai/Devstral-Small-2507_gguf/resolve/main/Devstral-Small-2507-Q4_K_M.gguf](https://huggingface.co/mistralai/Devstral-Small-2507_gguf/resolve/main/Devstral-Small-2507-Q4_K_M.gguf)",
                     "size_gb": 14.33,
                     "ram_required_gb": 22.0,
                     "parameters": "24B",
                     "context_tokens": 131072,
                     "category": "agentic-coding",
                     "recommended": false,
+                    "supports_cot": false,
                     "description": "Agentic software-engineering model. Fits in 32 GB RAM at Q4_K_M, but it is heavy and better suited to long coding-agent sessions."
                 }
             }

@@ -141,7 +141,7 @@
         "install -D -m 755 target/release/gnome-lens /app/bin/gnome-lens-daemon",
         "install -D -m 644 metadata/org.gnome.Lens.desktop /app/share/applications/org.gnome.Lens.desktop",
         "install -D -m 644 autostart/org.gnome.Lens.desktop /app/etc/xdg/autostart/org.gnome.Lens.desktop",
-        "install -D -m 644 metadata/org.gnoem.Lens.appdata.xml /app/share/metainfo/org.gnome.Lens.appdata.xml",
+        "install -D -m 644 metadata/org.gnome.Lens.appdata.xml /app/share/metainfo/org.gnome.Lens.appdata.xml",
         "install -D -m 644 metadata/org.gnome.Lens.icon.svg /app/share/icons/hicolor/scalable/apps/org.gnome.Lens.svg"
       ],
       "sources": [

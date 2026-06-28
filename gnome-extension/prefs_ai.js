@@ -280,7 +280,7 @@ class AIEngineManager {
             }
         }
 
-        this.modelGroup.set_description('Select the local AI model to power Gnome Lens. Larger models provide better reasoning but require more system RAM. (Note: Microsoft Phi models are completely unsupported due to execution instability.)');
+        this.modelGroup.set_description('Select the local AI model. Larger models provide better reasoning but may be slower and heavier to run.');
         
         for (let r of this.modelRows) {
             this.modelGroup.remove(r);
@@ -358,7 +358,7 @@ export function buildAIPage(settings, window) {
     
     const aiFilteringRow = new Adw.SwitchRow({
         title: 'Enable AI based filtering',
-        subtitle: 'Uses Rhai script generation to intelligently filter data.',
+        subtitle: 'Uses AI to intelligently filter data when such questions are detected.',
     });
     settings.bind('enable-ai-filtering', aiFilteringRow, 'active', Gio.SettingsBindFlags.DEFAULT);
     
