@@ -1,4 +1,4 @@
-# Lens for GNOME Backend
+# Lens for GNOME
 
 **Lens for GNOME** indexes local files, extracts searchable text, runs local embeddings, handles OCR, syncs IMAP mail, and serves search results.
 
@@ -93,6 +93,7 @@ Current fast paths include:
 
 * Calculator queries
 * Desktop application launching
+* Filesystem browsing
 
 This keeps simple actions instant.
 
