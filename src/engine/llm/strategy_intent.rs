@@ -30,16 +30,13 @@ impl LlmStrategy for IntentStrategy {
             "que", "como", "porque", "quien", "donde", "cual", "explique", "resuma"
         ];
         
-        let ast_filter_triggers = [
+        let script_filter_triggers = [
+            "regex", "pattern", "starts", "ends", "starting", "ending", "format", "wildcard", "match",
             "less", "<", ">", "below", "greater", "under", "over", "above", "only", "larger", "smaller", "exactly",
             "without", "excluding", "not", "contains", "containing", "exact",
             "minder", "meer", 
             "unter", "über", 
             "menos", "mayor", "debajo", "encima"
-        ];
-
-        let script_filter_triggers = [
-            "regex", "pattern", "starts", "ends", "starting", "ending", "format", "wildcard", "match"
         ];
         
         let time_triggers = [
@@ -51,7 +48,6 @@ impl LlmStrategy for IntentStrategy {
 
         let mut has_trigger = false;
         if synthesis_triggers.iter().any(|&w| words.contains(&w)) { has_trigger = true; }
-        if ast_filter_triggers.iter().any(|&w| words.contains(&w)) { has_trigger = true; }
         if script_filter_triggers.iter().any(|&w| words.contains(&w)) { has_trigger = true; }
         if time_triggers.iter().any(|&w| words.contains(&w)) { has_trigger = true; }
         
@@ -77,13 +73,12 @@ impl LlmStrategy for IntentStrategy {
             Classify the user's search intent into ONE digit:\n\
             1: SKIP (Standard keyword search)\n\
             2: REFINE_TIME (Time/Date filters, e.g., 'last year', 'yesterday')\n\
-            3: FILTER_AST (Basic math/logic/exact filters, e.g., 'under 100', 'without', '\"exact\"')\n\
-            4: SYNTHESIZE (Questions needing a written descriptive answer, e.g., 'explain how', 'how much', 'what is', 'why')\n\
-            5: FILTER_SCRIPT (Complex programmatic logic, Regex, 'starts with', 'ends with', complex substrings)\n\n\
+            3: FILTER_SCRIPT (Math, logic, regex, quantitative, and exact filters, e.g., 'under 100', 'below 50', 'starts with', 'without', '\"exact\"')\n\
+            4: SYNTHESIZE (Questions needing a written descriptive answer, e.g., 'explain how', 'what is', 'why')\n\n\
             CRITICAL HIERARCHY OF RULES:\n\
             - PRIORITY A: If the query is a question asking for an explanation, summary, or descriptive answer (e.g., 'how much', 'what', 'how', 'why', 'who', 'when', 'where', 'explain', 'summarize'), answer 4.\n\
-            - PRIORITY B: If the query requests regex, patterns, or complex string manipulation (starts/ends with, format), answer 5.\n\
-            - PRIORITY C: If the query contains quantitative filters ('less', 'greater', 'under', 'over', 'below', 'above') OR literal quotes (\") OR exclusionary words ('not', 'excluding', 'without'), answer 5.\n\
+            - PRIORITY B: If the query contains quantitative filters ('less', 'greater', 'under', 'over', 'below', 'above', '<', '>') OR literal quotes (\") OR exclusionary words ('not', 'excluding', 'without') OR programming constraints ('regex', 'starts', 'ends', 'format'), answer 3.\n\
+            - PRIORITY C: If the query contains time or date filters ('ago', 'last', 'past', 'days', 'weeks', 'months', 'years', 'before', 'after', 'yesterday', 'today'), answer 2.\n\
             - PRIORITY D: Only if NO filters or questions exist, answer 1.\n\n\
             Query:\n\
             [{}]\n\
@@ -96,7 +91,6 @@ impl LlmStrategy for IntentStrategy {
         
         let mut intent = LlmIntent::Skip;
         if response.contains('4') { intent = LlmIntent::SynthesizeAnswer; }
-        else if response.contains('5') { intent = LlmIntent::FilterScript; }
         else if response.contains('3') { intent = LlmIntent::FilterScript; } 
         else if response.contains('2') { intent = LlmIntent::RefineSearch; }
 

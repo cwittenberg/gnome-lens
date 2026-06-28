@@ -390,16 +390,13 @@ impl LlmService {
     pub fn extract_core_concept(&self, query: &str, is_cancelled: Arc<AtomicBool>) -> String {
         let core = self.engine.lock().unwrap();
         let cot_bypass = if core.supports_cot { "<think>\n</think>\n" } else { "" };
+        
         let prompt = format!(
-            "<|im_start|>system\nYou are a search engine keyword extractor. Extract ONLY the core factual subject nouns from the question. Ignore all conversational words, verbs, and question phrasing. Output ONLY space-separated keywords.<|im_end|>\n\
+            "<|im_start|>system\nYou are a search engine keyword extractor. Extract ONLY the core factual subject nouns from the user's query. Ignore all conversational words, verbs, and question phrasing. Output ONLY space-separated keywords.<|im_end|>\n\
             <|im_start|>user\n\
-            Question: \"what are the system requirements for installing ubuntu 24.04\"\n\
-            Keywords: system requirements ubuntu 24.04 install\n\n\
-            Question: \"how do i reset the administrator password on a cisco router\"\n\
-            Keywords: reset administrator password cisco router\n\n\
-            Question: \"{}\"\n\
+            Query: \"{}\"\n\
             <|im_end|>\n\
-            <|im_start|>assistant\n{}", query, cot_bypass
+            <|im_start|>assistant\n{}Keywords: ", query, cot_bypass
         );
         let response = core.generate_text("KEYWORD_EXTRACTION", &prompt, 150, is_cancelled);
 

@@ -29,81 +29,50 @@ impl LlmStrategy for SynthesisStrategy {
         
         let mut context_block = String::new();
         
+        // We no longer feed Document IDs to the LLM. 
+        // We strip away all metadata and give it pure text so it can focus 100% on answering.
         if context_docs.is_empty() {
-            context_block.push_str("No local documents found.\n\n");
+            context_block.push_str("No documents available.\n");
         } else {
-            for (i, doc) in context_docs.iter().enumerate() {
+            for doc in context_docs.iter() {
                 let is_shallow = doc.metadata.get("shallow_index").map(|v| v.as_str()) == Some("true");
-                
-                let doc_date = doc.metadata.get("date").or_else(|| doc.metadata.get("created_at")).unwrap_or(&String::from("Unknown Date")).clone();
-                let doc_author = doc.metadata.get("from").or_else(|| doc.metadata.get("author")).unwrap_or(&String::from("Unknown Author")).clone();
-                
-                if is_shallow {
-                    context_block.push_str(&format!(
-                        "--- BEGIN SOURCE [{}] ---\nFilename: {}\nPath: {:?}\nDate: {}\nAuthor: {}\nContent:\n[SHALLOW FILE METADATA ONLY. CONTENT UNINDEXED AND UNREADABLE.]\n--- END SOURCE [{}] ---\n\n", 
-                        i + 1, doc.title, doc.filepath, doc_date, doc_author, i + 1
-                    ));
-                } else {
+                if !is_shallow {
                     let content = doc.full_context.as_deref().unwrap_or(&doc.snippet);
-                    
-                    // Use the core_concept (distilled keywords) instead of the raw conversational query
-                    // to anchor the sliding window tightly around the factual data paragraphs.
                     let safe_content = extract_relevant_window(content, &core_concept, 1200);
-                    
-                    context_block.push_str(&format!(
-                        "--- BEGIN SOURCE [{}] ---\nFilename: {}\nDate: {}\nAuthor: {}\nContent:\n{}\n--- END SOURCE [{}] ---\n\n", 
-                        i + 1, doc.title, doc_date, doc_author, safe_content, i + 1
-                    ));
+                    context_block.push_str(&format!("{}\n\n", safe_content.trim()));
                 }
             }
         }
 
         let current_unix_ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let cot_bypass = if core.supports_cot { "<think>\n</think>\n" } else { "" };
 
-        // Prompt enhanced with stronger negative constraints regarding shallow files
-        let prompt = format!(
-            "<|im_start|>system\nYou are a helpful and direct local data assistant. You MUST answer the user's question using ONLY the provided local file CONTEXT. General knowledge is FORBIDDEN.\nCurrent System UNIX Timestamp: {}<|im_end|>\n\
+        // ==========================================
+        // PASS 1: SEMANTIC EXTRACTION (LLM)
+        // ==========================================
+        let prompt_pass_1 = format!(
+            "<|im_start|>system\nYou are a precise local data assistant. Answer the user's question based ONLY on the provided DOCUMENTS. General knowledge is FORBIDDEN. Keep your answer concise. Current UNIX Timestamp: {}<|im_end|>\n\
             <|im_start|>user\n\
-            CRITICAL INSTRUCTIONS:\n\
-            1. Answer the question directly, concisely, and naturally based on the CONTEXT.\n\
-            2. DO NOT be overly pedantic or skeptical. If a recipe says '4 egg yolks' and the user asks 'how many eggs', simply answer '4 egg yolks'. Do not over-analyze.\n\
-            3. If the context does not contain the answer, or if all relevant sources are marked [SHALLOW FILE METADATA ONLY], output exactly: ANSWER: I don't know.\n\
-            4. You MUST end your response with a SOURCES block listing the Source IDs you used.\n\n\
-            FORMAT:\n\
-            ANSWER: <Your concise, helpful answer>\n\
-            SOURCES: <Comma-separated numbers, e.g., 1, 3>\n\n\
-            CONTEXT:\n{}\n\n\
-            QUERY: {}<|im_end|>\n\
+            DOCUMENTS:\n\
+            {}\n\
+            \n\
+            QUESTION: {}\n\
+            \n\
+            If the documents do not contain the answer, reply exactly with: I don't know.<|im_end|>\n\
             <|im_start|>assistant\n\
-            ANSWER: ",
-            current_unix_ts, context_block, query
+            {}",
+            current_unix_ts, context_block.trim(), query, cot_bypass
         );
         
-        let response = core.generate_text("SYNTHESIS_STRATEGY", &prompt, 400, is_cancelled);
+        let response_pass_1 = core.generate_text("SYNTHESIS_PASS_1", &prompt_pass_1, 400, is_cancelled.clone());
         
-        // Safely remove reasoning blocks before extracting citations
-        let mut clean_response = response;
-        if let Some(end_idx) = clean_response.find("</think>") {
-            clean_response = clean_response[end_idx + 8..].trim().to_string();
+        let mut clean_answer = response_pass_1.trim().to_string();
+        if let Some(end_idx) = clean_answer.find("</think>") {
+            clean_answer = clean_answer[end_idx + 8..].trim().to_string();
         }
-        let full_response = format!("ANSWER: {}", clean_response);
-        
-        let mut sources_str = String::new();
-        
-        let upper_response = full_response.to_uppercase();
-        let answer = if let Some(ans_idx) = upper_response.find("ANSWER:") {
-            if let Some(src_idx) = upper_response.find("SOURCES:") {
-                sources_str = full_response[src_idx + 8..].trim().to_string();
-                full_response[ans_idx + 7..src_idx].trim().to_string()
-            } else {
-                full_response[ans_idx + 7..].trim().to_string()
-            }
-        } else {
-            full_response.clone()
-        };
 
-        let lower_ans = answer.to_lowercase();
-        if lower_ans.contains("i don't know") || lower_ans.contains("i do not know") {
+        let lower_ans = clean_answer.to_lowercase();
+        if lower_ans.is_empty() || lower_ans.contains("i don't know") || lower_ans.contains("i do not know") {
             return serde_json::json!({
                 "answer": "I don't know. The requested information is not available in the indexed local files.",
                 "reasoning": "Irrelevant or insufficient context.", 
@@ -112,21 +81,63 @@ impl LlmStrategy for SynthesisStrategy {
                 "cited_indices": []
             });
         }
+
+        // ==========================================
+        // PASS 2: DETERMINISTIC ATTRIBUTION (RUST)
+        // ==========================================
+        // We eliminate the second LLM call entirely. We tokenize the LLM's answer and find 
+        // the highest overlapping document deterministically.
         
         let mut raw_cited_indices = std::collections::HashSet::new();
-        // Map all non-digits to spaces, then split by whitespace to prevent parsing errors.
-        let numbers_only: String = sources_str.chars().map(|c| if c.is_ascii_digit() { c } else { ' ' }).collect();
-        for part in numbers_only.split_whitespace() {
-            if let Ok(num) = part.parse::<usize>() {
-                raw_cited_indices.insert(num);
-            }
-        }
+        let clean_lower_ans = lower_ans.replace(|c: char| !c.is_alphanumeric() && !c.is_whitespace(), "");
         
-        for i in 1..=5 {
-            let marker1 = format!("[{}]", i);
-            let marker2 = format!("Source [{}]", i);
-            if answer.contains(&marker1) || answer.contains(&marker2) {
-                raw_cited_indices.insert(i);
+        // Filter out common stop words to ensure we only match on factual keywords
+        let ans_words: Vec<&str> = clean_lower_ans
+            .split_whitespace()
+            .filter(|w| w.len() > 3 && !["this", "that", "they", "them", "their", "what", "when", "where", "which", "there", "these", "those"].contains(w))
+            .collect();
+
+        let mut best_score = 0;
+        
+        for (i, doc) in context_docs.iter().enumerate() {
+            let doc_id = i + 1;
+            let is_shallow = doc.metadata.get("shallow_index").map(|v| v.as_str()) == Some("true");
+            
+            if is_shallow { continue; }
+
+            let content = doc.full_context.as_deref().unwrap_or(&doc.snippet).to_lowercase();
+            let mut score = 0;
+
+            // 1. Direct substring match (Strongest signal: The LLM output exactly what it read)
+            if content.contains(&lower_ans) {
+                score += 1000;
+            } else {
+                // 2. Keyword overlap (Handles slight LLM paraphrasing)
+                for word in &ans_words {
+                    if content.contains(word) {
+                        score += 10;
+                    }
+                }
+            }
+
+            // 3. Concept fallback (Ensures a tie-break maps back to the search query intent)
+            let lower_concept = core_concept.to_lowercase();
+            let concept_words: Vec<&str> = lower_concept.split_whitespace().filter(|w| w.len() > 3).collect();
+            for word in &concept_words {
+                 if content.contains(word) {
+                     score += 1;
+                 }
+            }
+
+            // Assign the citation to the document with the highest mathematical overlap
+            if score > 0 {
+                if score > best_score {
+                    best_score = score;
+                    raw_cited_indices.clear();
+                    raw_cited_indices.insert(doc_id);
+                } else if score == best_score {
+                    raw_cited_indices.insert(doc_id);
+                }
             }
         }
 
@@ -137,26 +148,22 @@ impl LlmStrategy for SynthesisStrategy {
         for &idx in &raw_cited_indices {
             if idx > 0 && idx <= context_docs.len() {
                 let doc = &context_docs[idx - 1];
-                let is_shallow = doc.metadata.get("shallow_index").map(|v| v.as_str()) == Some("true");
+                valid_cited_indices.insert(idx);
                 
-                if !is_shallow {
-                    valid_cited_indices.insert(idx);
-                    
-                    let clean_snip = doc.snippet.replace("<b>", "").replace("</b>", "").replace('\n', " ").trim().to_string();
-                    if !clean_snip.is_empty() {
-                        evidence_blocks.push(format!("Source [{}]: \"...{}...\"", idx, clean_snip));
-                    }
+                let clean_snip = doc.snippet.replace("<b>", "").replace("</b>", "").replace('\n', " ").trim().to_string();
+                if !clean_snip.is_empty() {
+                    evidence_blocks.push(format!("Source [{}]: \"...{}...\"", idx, clean_snip));
                 }
             }
         }
 
-        // Override: If the model provided citations, but they were ALL invalid (shallow or out of bounds)
-        if !raw_cited_indices.is_empty() && valid_cited_indices.is_empty() {
+        // Override: If no overlap could be found, the LLM hallucinated external knowledge
+        if raw_cited_indices.is_empty() {
             return serde_json::json!({
                 "answer": "I don't know. The requested information is not available in the indexed local files.",
-                "reasoning": "Hallucination caught: The model attempted to cite unindexed (shallow) files to support an answer likely derived from general pre-trained knowledge.", 
+                "reasoning": "Hallucination caught: The generated answer did not mathematically correlate to any indexed document.", 
                 "confidence_score": 0,
-                "confidence_justification": "All cited sources were shallow/unreadable metadata files.",
+                "confidence_justification": "Answer failed deterministic attribution.",
                 "cited_indices": []
             });
         }
@@ -165,16 +172,16 @@ impl LlmStrategy for SynthesisStrategy {
         sorted_indices.sort_unstable();
 
         let final_reasoning = if evidence_blocks.is_empty() {
-            "No direct quotes extracted.".to_string()
+            "Attributed via semantic overlap.".to_string()
         } else {
             format!("Deterministic Evidence:\n{}", evidence_blocks.join("\n\n"))
         };
         
         serde_json::json!({
-            "answer": answer,
+            "answer": clean_answer,
             "reasoning": final_reasoning,
             "confidence_score": 100,
-            "confidence_justification": "Derived from valid indexed content.",
+            "confidence_justification": "Derived from valid indexed content utilizing a hybrid LLM/Deterministic architecture.",
             "cited_indices": sorted_indices
         })
     }
