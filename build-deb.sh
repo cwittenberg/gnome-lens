@@ -7,8 +7,8 @@ set -euo pipefail
 PACKAGE_NAME="lens-for-gnome"
 VERSION="1.0.0"
 ARCHITECTURE="amd64"
-MAINTAINER="Your Name <your.email@example.com>"
-DESCRIPTION="Intelligent Semantic File Search Engine and Local Data Assistant for GNOME"
+MAINTAINER="Christian Wittenberg <christianwittenberg@gmail.com>"
+DESCRIPTION="Intelligent Local Data Assistant for GNOME"
 
 BUILD_ROOT="/tmp/${PACKAGE_NAME}-build-deb-root"
 DEB_DIR="${BUILD_ROOT}/DEBIAN"
@@ -33,6 +33,8 @@ echo "[Stage 3/6] Populating architecture file layout structures..."
 mkdir -p "${BUILD_ROOT}/usr/bin"
 mkdir -p "${BUILD_ROOT}/usr/lib/systemd/user"
 mkdir -p "${BUILD_ROOT}/usr/share/applications"
+mkdir -p "${BUILD_ROOT}/usr/share/metainfo"
+mkdir -p "${BUILD_ROOT}/usr/share/icons/hicolor/scalable/apps"
 
 # Copy verified compilation artifacts
 cp target/release/lens-for-gnome "${BUILD_ROOT}/usr/bin/lens-for-gnome"
@@ -42,20 +44,36 @@ chmod 755 "${BUILD_ROOT}/usr/bin/lens-for-gnome"
 cp target/release/lens-for-gnome-manager "${BUILD_ROOT}/usr/bin/lens-for-gnome-manager"
 chmod 755 "${BUILD_ROOT}/usr/bin/lens-for-gnome-manager"
 
+# Copy AppStream Metadata for GNOME Software / AppCenter
+if [ -f "metadata/io.github.cwittenberg.Lens.metainfo.xml" ]; then
+    cp metadata/io.github.cwittenberg.Lens.metainfo.xml "${BUILD_ROOT}/usr/share/metainfo/org.gnome.Lens.metainfo.xml"
+    chmod 644 "${BUILD_ROOT}/usr/share/metainfo/org.gnome.Lens.metainfo.xml"
+else
+    echo "Warning: metainfo.xml not found in metadata/. AppCenter listing may fail."
+fi
+
+# Copy Application Icon
+if [ -f "metadata/io.github.cwittenberg.Lens.icon.svg" ]; then
+    cp metadata/io.github.cwittenberg.Lens.icon.svg "${BUILD_ROOT}/usr/share/icons/hicolor/scalable/apps/org.gnome.Lens.svg"
+    chmod 644 "${BUILD_ROOT}/usr/share/icons/hicolor/scalable/apps/org.gnome.Lens.svg"
+else
+    echo "Warning: icon.svg not found in metadata/."
+fi
+
 # Generate GUI Application Desktop Entry (AppCenter Compliance)
-cat << 'EOF' > "${BUILD_ROOT}/usr/share/applications/lens-for-gnome-manager.desktop"
+cat << 'EOF' > "${BUILD_ROOT}/usr/share/applications/org.gnome.Lens.desktop"
 [Desktop Entry]
-Name=Lens for GNOME
-Comment=Service Manager and Log Viewer for Lens for GNOME
-Exec=/usr/bin/lens-for-gnome-manager
-Icon=system-search
-Terminal=false
 Type=Application
-Categories=System;Utility;
+Name=Lens for GNOME
+Comment=Intelligent Local Data Assistant for GNOME
+Exec=/usr/bin/lens-for-gnome-manager
+Icon=org.gnome.Lens
+Terminal=false
+Categories=GNOME;GTK;Utility;Core;
+StartupNotify=true
 EOF
 
-chmod 644 "${BUILD_ROOT}/usr/share/applications/lens-for-gnome-manager.desktop"
-
+chmod 644 "${BUILD_ROOT}/usr/share/applications/org.gnome.Lens.desktop"
 
 # 4. Generate Integrated Systemd Service Block Configuration
 echo "[Stage 4/6] Embedding Systemd User Service unit description..."
@@ -105,17 +123,17 @@ if [ "$1" = "configure" ]; then
     echo " Enabling and starting the service globally for active users..."
     echo "========================================================================="
     
-    # Enable globally for all users on next login
+    # Enable globally for all users on next login (Boot mapping via default.target)
     systemctl --global enable lens-for-gnome.service || true
     
-    # Start for currently logged in users
+    # Start for currently logged in users by injecting secure DBus session addresses
     for uid_dir in /run/user/*; do
         if [ -d "$uid_dir" ]; then
             uid=$(basename "$uid_dir")
             user=$(id -un "$uid" 2>/dev/null || true)
             if [ -n "$user" ]; then
-                sudo -u "$user" XDG_RUNTIME_DIR="$uid_dir" systemctl --user daemon-reload || true
-                sudo -u "$user" XDG_RUNTIME_DIR="$uid_dir" systemctl --user start lens-for-gnome.service || true
+                sudo -u "$user" XDG_RUNTIME_DIR="$uid_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$uid_dir/bus" systemctl --user daemon-reload || true
+                sudo -u "$user" XDG_RUNTIME_DIR="$uid_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$uid_dir/bus" systemctl --user start lens-for-gnome.service || true
             fi
         fi
     done
@@ -144,7 +162,7 @@ if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
                 uid=$(basename "$uid_dir")
                 user=$(id -un "$uid" 2>/dev/null || true)
                 if [ -n "$user" ]; then
-                    sudo -u "$user" XDG_RUNTIME_DIR="$uid_dir" systemctl --user stop lens-for-gnome.service || true
+                    sudo -u "$user" XDG_RUNTIME_DIR="$uid_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=$uid_dir/bus" systemctl --user stop lens-for-gnome.service || true
                 fi
             fi
         done

@@ -33,78 +33,64 @@ fn get_logs() -> String {
     "No logs found. Start the engine to generate initialization logs.".to_string()
 }
 
-fn check_status() -> bool {
-    // 1. Check native systemd service state
-    if let Ok(output) = Command::new("systemctl")
+fn check_status() -> (bool, bool) {
+    // Check if the service is currently running
+    let is_active = if let Ok(output) = Command::new("systemctl")
         .args(&["--user", "is-active", "lens-for-gnome.service"])
         .output() 
     {
-        let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if status == "active" {
-            return true;
-        }
-    }
-    
-    // 2. Fallback check for raw background processes (Using -x for an exact binary match)
-    if let Ok(output) = Command::new("pgrep").args(&["-x", "lens-for-gnome"]).output() {
-        if output.status.success() {
-            return true;
-        }
-    }
-    false
+        String::from_utf8_lossy(&output.stdout).trim() == "active"
+    } else {
+        false
+    };
+
+    // Check if the service is enabled to launch automatically at login/boot
+    let is_enabled = if let Ok(output) = Command::new("systemctl")
+        .args(&["--user", "is-enabled", "lens-for-gnome.service"])
+        .output() 
+    {
+        String::from_utf8_lossy(&output.stdout).trim() == "enabled"
+    } else {
+        false
+    };
+
+    (is_active, is_enabled)
 }
 
 fn start_daemon() {
-    let status = Command::new("systemctl").args(&["--user", "start", "lens-for-gnome.service"]).status();
-    
-    // Fallback: If systemd isn't active (e.g., running from source locally), spawn the binary directly
-    if status.is_err() || !status.unwrap().success() {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let log_path = format!("{}/.local/state/lens-for-gnome/daemon.log", home);
-        
-        let bin_path = if std::path::Path::new("./target/release/lens-for-gnome").exists() {
-            "./target/release/lens-for-gnome"
-        } else {
-            "lens-for-gnome"
-        };
-        
-        let _ = Command::new("sh")
-            .arg("-c")
-            .arg(format!("nohup {} > {} 2>&1 &", bin_path, log_path))
-            .spawn();
-    }
+    let _ = Command::new("systemctl").args(&["--user", "start", "lens-for-gnome.service"]).spawn();
 }
 
 fn stop_daemon() {
     let _ = Command::new("systemctl").args(&["--user", "stop", "lens-for-gnome.service"]).spawn();
-    
-    // Safety fail-over using an exact match (-x) to ensure we don't accidentally kill lens-for-gnome-manager
-    let _ = Command::new("pkill").args(&["-x", "lens-for-gnome"]).spawn();
 }
 
 fn restart_daemon() {
-    stop_daemon();
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    start_daemon();
+    let _ = Command::new("systemctl").args(&["--user", "restart", "lens-for-gnome.service"]).spawn();
 }
 
-fn create_icon_button(icon_name: &str, label_text: &str) -> Button {
+fn toggle_autostart(enable: bool) {
+    if enable {
+        let _ = Command::new("systemctl").args(&["--user", "enable", "lens-for-gnome.service"]).spawn();
+    } else {
+        let _ = Command::new("systemctl").args(&["--user", "disable", "lens-for-gnome.service"]).spawn();
+    }
+}
+
+fn update_icon_button(btn: &Button, icon_name: &str, label_text: &str) {
     let box_ = Box::new(Orientation::Horizontal, 6);
     box_.set_halign(Align::Center);
     let icon = Image::from_icon_name(icon_name);
     let label = Label::new(Some(label_text));
     box_.append(&icon);
     box_.append(&label);
-    
-    let btn = Button::new();
     btn.set_child(Some(&box_));
-    btn
 }
 
 fn ensure_desktop_integration() {
     let home = std::env::var("HOME").unwrap_or_default();
     let app_dir = format!("{}/.local/share/applications", home);
-    let desktop_path = format!("{}/org.gnome.shell.extensions.lens-for-gnome.manager.desktop", app_dir);
+    let desktop_path = format!("{}/org.gnome.Lens.desktop", app_dir);
     
     let Ok(current_exe) = std::env::current_exe() else { return };
     let Ok(current_dir) = std::env::current_dir() else { return };
@@ -151,9 +137,9 @@ fn build_ui(app: &Application) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Lens for GNOME")
-        .icon_name("io.github.cwittenberg.Lens.icon")
-        .default_width(900)
-        .default_height(600)
+        .icon_name("org.gnome.Lens")
+        .default_width(1050)
+        .default_height(650)
         .build();
 
     let header_bar = HeaderBar::new();
@@ -169,7 +155,7 @@ fn build_ui(app: &Application) {
     main_box.set_margin_end(15);
 
     let header_label = Label::new(None);
-    header_label.set_markup("\n<small>Use this management utility to monitor logs, manage the backend service, and control the search indexer.</small>");
+    header_label.set_markup("\n<small>Use this management utility to monitor logs, manage the backend systemd service, and control the search indexer.</small>");
     header_label.set_justify(Justification::Left);
     header_label.set_margin_bottom(10);
 
@@ -179,15 +165,23 @@ fn build_ui(app: &Application) {
     let status_label = Label::new(Some("Status: Checking Engine State..."));
     status_label.set_margin_end(20);
     
-    let start_btn = create_icon_button("media-playback-start-symbolic", "Start Engine");
-    let stop_btn = create_icon_button("media-playback-stop-symbolic", "Stop Engine");
-    let restart_btn = create_icon_button("view-refresh-symbolic", "Restart");
-    let copy_btn = create_icon_button("edit-copy-symbolic", "Copy Logs");
+    let start_btn = Button::new();
+    let stop_btn = Button::new();
+    let restart_btn = Button::new();
+    let autostart_btn = Button::new();
+    let copy_btn = Button::new();
+
+    update_icon_button(&start_btn, "media-playback-start-symbolic", "Start Engine");
+    update_icon_button(&stop_btn, "media-playback-stop-symbolic", "Stop Engine");
+    update_icon_button(&restart_btn, "view-refresh-symbolic", "Restart");
+    update_icon_button(&autostart_btn, "system-run-symbolic", "Checking Autostart...");
+    update_icon_button(&copy_btn, "edit-copy-symbolic", "Copy Logs");
 
     controls_box.append(&status_label);
     controls_box.append(&start_btn);
     controls_box.append(&stop_btn);
     controls_box.append(&restart_btn);
+    controls_box.append(&autostart_btn);
     controls_box.append(&copy_btn);
 
     let text_view = TextView::new();
@@ -215,6 +209,8 @@ fn build_ui(app: &Application) {
     main_box.append(&scrolled_window);
     window.set_child(Some(&main_box));
 
+    let is_enabled_state = Rc::new(RefCell::new(false));
+
     // Handle instant UI feedback on click events before the next poll cycle occurs
     let start_btn_clone = start_btn.clone();
     let sl_clone = status_label.clone();
@@ -238,6 +234,14 @@ fn build_ui(app: &Application) {
         restart_btn_clone.set_sensitive(false);
         sl_clone3.set_markup("<b>Status: <span foreground='orange'>Restarting...</span></b>");
         restart_daemon();
+    });
+
+    let is_enabled_clone = is_enabled_state.clone();
+    let autostart_btn_clone = autostart_btn.clone();
+    autostart_btn.connect_clicked(move |_| {
+        autostart_btn_clone.set_sensitive(false);
+        let current = *is_enabled_clone.borrow();
+        toggle_autostart(!current);
     });
 
     let last_logs_len = Rc::new(RefCell::new(0));
@@ -268,6 +272,7 @@ fn build_ui(app: &Application) {
     let start_weak = start_btn.downgrade();
     let stop_weak = stop_btn.downgrade();
     let restart_weak = restart_btn.downgrade();
+    let as_weak = autostart_btn.downgrade();
 
     // Poll the engine status asynchronously and update the UI
     glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
@@ -291,8 +296,12 @@ fn build_ui(app: &Application) {
             Some(b) => b,
             None => return glib::ControlFlow::Break,
         };
+        let autostart_btn = match as_weak.upgrade() {
+            Some(b) => b,
+            None => return glib::ControlFlow::Break,
+        };
 
-        let is_running = check_status();
+        let (is_running, is_enabled) = check_status();
 
         if is_running {
             status_label.set_markup("<b>Status: <span foreground='green'>Running</span></b>");
@@ -304,6 +313,17 @@ fn build_ui(app: &Application) {
             start_btn.set_sensitive(true);
             stop_btn.set_sensitive(false);
             restart_btn.set_sensitive(false);
+        }
+
+        autostart_btn.set_sensitive(true);
+        if is_enabled != *is_enabled_state.borrow() {
+            *is_enabled_state.borrow_mut() = is_enabled;
+        }
+
+        if is_enabled {
+            update_icon_button(&autostart_btn, "system-lock-screen-symbolic", "Disable Autostart");
+        } else {
+            update_icon_button(&autostart_btn, "system-run-symbolic", "Enable Autostart");
         }
 
         let logs = get_logs();
@@ -334,14 +354,15 @@ fn main() -> glib::ExitCode {
     ensure_desktop_integration();
 
     let app = Application::builder()
-        .application_id("org.gnome.shell.extensions.lens-for-gnome.manager")
+        .application_id("org.gnome.Lens")
         .build();
 
     // Hook global GTK initialization calls (like default icons) to the startup signal
     app.connect_startup(|_| {
-        gtk::Window::set_default_icon_name("io.github.cwittenberg.Lens.icon");
+        gtk::Window::set_default_icon_name("org.gnome.Lens");
     });
 
     app.connect_activate(build_ui);
     app.run()
 }
+
