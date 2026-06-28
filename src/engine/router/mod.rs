@@ -138,66 +138,175 @@ impl SystemRouter {
         // THE INTERPRETER PATTERN: Extract Explicit System Rules deterministically 
         // =====================================================================
         
-        // NEW NATIVE FOLDER PARSER: We check the string BEFORE breaking it up by spaces!
-        let mut check_str = search_query.raw_text.clone();
-        if check_str.to_lowercase().starts_with("dir:") {
-            check_str = check_str[4..].trim().to_string();
-        } else if check_str.to_lowercase().starts_with("path:") {
-            check_str = check_str[5..].trim().to_string();
+        let mut current_query = search_query.raw_text.clone();
+        let lower_query = current_query.to_lowercase();
+        let home_dir = std::env::var("HOME").unwrap_or_default();
+        
+        // 1. Find and extract dir: or path: explicitly with robust quoting and fallback space validation
+        let dir_markers = ["dir:", "path:"];
+        let mut found_dir = false;
+        
+        for marker in dir_markers {
+            if let Some(start) = lower_query.find(marker) {
+                let val_start = start + marker.len();
+                let rest_orig = &current_query[val_start..];
+                
+                let mut dir_val = String::new();
+                let mut chars_to_consume = 0;
+
+                if rest_orig.starts_with('"') {
+                    if let Some(end_idx) = rest_orig[1..].find('"') {
+                        dir_val = rest_orig[1..=end_idx].to_string(); 
+                        chars_to_consume = end_idx + 2; 
+                    } else {
+                        dir_val = rest_orig[1..].to_string();
+                        chars_to_consume = rest_orig.len();
+                    }
+                } else if rest_orig.starts_with('\'') {
+                    if let Some(end_idx) = rest_orig[1..].find('\'') {
+                        dir_val = rest_orig[1..=end_idx].to_string();
+                        chars_to_consume = end_idx + 2;
+                    } else {
+                        dir_val = rest_orig[1..].to_string();
+                        chars_to_consume = rest_orig.len();
+                    }
+                } else {
+                    // Unquoted path. We must determine where the path ends and the trailing search keywords begin.
+                    let next_marker_pos = rest_orig.to_lowercase().find(" ext:")
+                        .or_else(|| rest_orig.to_lowercase().find(" type:"))
+                        .or_else(|| rest_orig.to_lowercase().find(" after:"))
+                        .or_else(|| rest_orig.to_lowercase().find(" since:"))
+                        .or_else(|| rest_orig.to_lowercase().find(" before:"))
+                        .unwrap_or(rest_orig.len());
+                        
+                    let raw_unquoted = rest_orig[..next_marker_pos].trim();
+                    let mut candidate = raw_unquoted.to_string();
+                    let mut found_valid_dir = false;
+                    
+                    // Walk backwards space-by-space to verify if a path physically exists to resolve ambiguity
+                    while !candidate.is_empty() {
+                        let expanded_cand = candidate.replace("~", &home_dir);
+                        if std::path::Path::new(&expanded_cand).is_dir() {
+                            dir_val = candidate.clone();
+                            chars_to_consume = candidate.len();
+                            found_valid_dir = true;
+                            break;
+                        }
+                        
+                        if let Some(last_space) = candidate.rfind(' ') {
+                            candidate = candidate[..last_space].to_string();
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    if !found_valid_dir {
+                        if let Some(first_space) = raw_unquoted.find(' ') {
+                            dir_val = raw_unquoted[..first_space].to_string();
+                            chars_to_consume = first_space;
+                        } else {
+                            dir_val = raw_unquoted.to_string();
+                            chars_to_consume = raw_unquoted.len();
+                        }
+                    }
+                }
+                
+                search_query.directory_filter = Some(dir_val.replace("~", &home_dir).trim().to_string());
+                
+                let before = &current_query[..start];
+                let after = &current_query[val_start + chars_to_consume..];
+                current_query = format!("{} {}", before, after);
+                found_dir = true;
+                break;
+            }
         }
         
-        let expanded_full_query = check_str.replace("~", &std::env::var("HOME").unwrap_or_default());
-        
-        if std::path::Path::new(&expanded_full_query).is_dir() {
-            search_query.directory_filter = Some(expanded_full_query);
-            search_query.raw_text = String::new(); // Drop raw text to force directory-browse
-        } else {
-            // Standard parsing for multi-token rules
-            let mut clean_text_parts = Vec::new();
-            
-            for token in search_query.raw_text.split_whitespace() {
-                let lower_token = token.to_lowercase();
+        // 2. IMPLICIT BARE PATH DETECTION: If the user typed an absolute path directly without "dir:"
+        if !found_dir {
+            // Look for an absolute path starting with '/' or '~/'
+            if let Some(start) = current_query.find(" /").map(|i| i + 1)
+                .or_else(|| current_query.find(" ~/").map(|i| i + 1))
+                .or_else(|| if current_query.starts_with('/') || current_query.starts_with("~/") { Some(0) } else { None })
+            {
+                let rest_orig = &current_query[start..];
                 
-                if lower_token.starts_with("ext:") || lower_token.starts_with("type:") {
-                    let val = token.split(':').nth(1).unwrap_or("");
-                    search_query.metadata_filters.insert("filetype".to_string(), val.to_lowercase());
-                } else if lower_token.starts_with("after:") || lower_token.starts_with("since:") {
-                    let val = token.split(':').nth(1).unwrap_or("");
-                    if let Some(ts) = parse_date_to_timestamp(val) {
-                        search_query.min_timestamp = Some(ts);
+                let next_marker_pos = rest_orig.to_lowercase().find(" ext:")
+                    .or_else(|| rest_orig.to_lowercase().find(" type:"))
+                    .or_else(|| rest_orig.to_lowercase().find(" after:"))
+                    .or_else(|| rest_orig.to_lowercase().find(" since:"))
+                    .or_else(|| rest_orig.to_lowercase().find(" before:"))
+                    .unwrap_or(rest_orig.len());
+                    
+                let raw_unquoted = rest_orig[..next_marker_pos].trim();
+                let mut candidate = raw_unquoted.to_string();
+                
+                while !candidate.is_empty() {
+                    let expanded_cand = candidate.replace("~", &home_dir);
+                    if std::path::Path::new(&expanded_cand).is_dir() {
+                        search_query.directory_filter = Some(expanded_cand.trim().to_string());
+                        let before = &current_query[..start];
+                        let after = &current_query[start + candidate.len()..];
+                        current_query = format!("{} {}", before, after);
+                        break;
                     }
-                } else if lower_token.starts_with("before:") {
-                    let val = token.split(':').nth(1).unwrap_or("");
-                    if let Some(ts) = parse_date_to_timestamp(val) {
-                        search_query.max_timestamp = Some(ts);
+                    
+                    if let Some(last_space) = candidate.rfind(' ') {
+                        candidate = candidate[..last_space].to_string();
+                    } else {
+                        break;
                     }
-                } else if !lower_token.starts_with("dir:") && !lower_token.starts_with("path:") {
-                    // Do not push the fallback token if it was an invalid dir request 
-                    clean_text_parts.push(token);
                 }
             }
-            
-            // Re-join the query having stripped out the syntactical commands to prevent embedding pollution
-            search_query.raw_text = clean_text_parts.join(" ");
         }
+        
+        let mut clean_text_parts = Vec::new();
+        
+        for token in current_query.split_whitespace() {
+            let lower_token = token.to_lowercase();
+            
+            if lower_token.starts_with("ext:") || lower_token.starts_with("type:") {
+                let val = token.split(':').nth(1).unwrap_or("");
+                search_query.metadata_filters.insert("filetype".to_string(), val.to_lowercase());
+            } else if lower_token.starts_with("after:") || lower_token.starts_with("since:") {
+                let val = token.split(':').nth(1).unwrap_or("");
+                if let Some(ts) = parse_date_to_timestamp(val) {
+                    search_query.min_timestamp = Some(ts);
+                }
+            } else if lower_token.starts_with("before:") {
+                let val = token.split(':').nth(1).unwrap_or("");
+                if let Some(ts) = parse_date_to_timestamp(val) {
+                    search_query.max_timestamp = Some(ts);
+                }
+            } else {
+                clean_text_parts.push(token);
+            }
+        }
+        
+        search_query.raw_text = clean_text_parts.join(" ");
 
         // =====================================================================
         // PHASE 0.5: DIRECT DIRECTORY BROWSING INTERCEPT
         // =====================================================================
-        if search_query.raw_text.is_empty() {
+        if search_query.raw_text.is_empty() 
+            && search_query.metadata_filters.is_empty() 
+            && search_query.min_timestamp.is_none() 
+            && search_query.max_timestamp.is_none() 
+        {
             if let Some(dir) = &search_query.directory_filter {
-                let fp_start = Instant::now();
-                let browse_results = self.store.browse_directory(dir);
-                
-                println!("[Router DEBUG] Directory Browse took: {:.2?}", fp_start.elapsed());
+                if std::path::Path::new(dir).is_dir() {
+                    let fp_start = Instant::now();
+                    let browse_results = self.store.browse_directory(dir);
+                    
+                    println!("[Router DEBUG] Directory Browse took: {:.2?} (Found {} results)", fp_start.elapsed(), browse_results.len());
 
-                send_chunk(serde_json::json!({
-                    "status": "final",
-                    "mode": "fast_pass",
-                    "results": browse_results
-                }).to_string());
-                
-                return;
+                    send_chunk(serde_json::json!({
+                        "status": "final",
+                        "mode": "fast_pass",
+                        "results": browse_results
+                    }).to_string());
+                    
+                    return;
+                }
             }
         }
 
@@ -234,7 +343,7 @@ impl SystemRouter {
             }
         }
 
-        println!("[Router DEBUG] Plugins & Vector Search took: {:.2?}", fp_start.elapsed());
+        println!("[Router DEBUG] Plugins & Vector Search took: {:.2?} (Found {} results)", fp_start.elapsed(), fast_results.len());
 
         // Strip the payload context before piping to the socket to prevent IPC bloat
         let partial_payload: Vec<_> = fast_results.iter().map(|r| {
@@ -263,7 +372,7 @@ impl SystemRouter {
         match intent {
             LlmIntent::Skip => {
                 send_chunk(serde_json::json!({"status": "done"}).to_string());
-                println!("[Router DEBUG] Skip Intent finished in {:.2?}", phase_start.elapsed());
+                println!("[Router DEBUG] Skip Intent finished in {:.2?} (Returned 0 LLM results)", phase_start.elapsed());
             },
             
             LlmIntent::FilterAst => {
@@ -319,7 +428,7 @@ impl SystemRouter {
                     "mode": "llm_filtered",
                     "results": final_payload
                 }).to_string());
-                println!("[Router DEBUG] FilterAst Intent finished in {:.2?}", phase_start.elapsed());
+                println!("[Router DEBUG] FilterAst Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());
             },
 
             LlmIntent::FilterScript => {
@@ -367,7 +476,7 @@ impl SystemRouter {
                     "mode": "llm_filtered",
                     "results": final_payload
                 }).to_string());
-                println!("[Router DEBUG] FilterScript Intent finished in {:.2?}", phase_start.elapsed());
+                println!("[Router DEBUG] FilterScript Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());
             },
 
             LlmIntent::RefineSearch => {
@@ -395,7 +504,7 @@ impl SystemRouter {
                     "mode": "llm_enhanced",
                     "results": final_payload
                 }).to_string());
-                println!("[Router DEBUG] RefineSearch Intent finished in {:.2?}", phase_start.elapsed());
+                println!("[Router DEBUG] RefineSearch Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());
             },
             
             LlmIntent::SynthesizeAnswer => {
@@ -442,7 +551,7 @@ impl SystemRouter {
                     // Replaces the bogus fast_results with only the strictly cited files
                     "results": final_payload
                 }).to_string());
-                println!("[Router DEBUG] SynthesizeAnswer Intent finished in {:.2?}", phase_start.elapsed());
+                println!("[Router DEBUG] SynthesizeAnswer Intent finished in {:.2?} (Returned {} results)", phase_start.elapsed(), final_payload.len());
             }
         }
 

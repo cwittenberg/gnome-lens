@@ -81,6 +81,16 @@
       <summary>Preview Window Height</summary>
       <description>Saved height for the preview window.</description>
     </key>
+    <key name="lens-x" type="i">
+      <default>-1</default>
+      <summary>Search Window X Position</summary>
+      <description>Saved X coordinate for the search window.</description>
+    </key>
+    <key name="lens-y" type="i">
+      <default>-1</default>
+      <summary>Search Window Y Position</summary>
+      <description>Saved Y coordinate for the search window.</description>
+    </key>
     <key name="ui-color" type="s">
       <default>'#1e1e1e'</default>
       <summary>UI Background Color</summary>

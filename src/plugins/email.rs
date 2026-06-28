@@ -20,16 +20,20 @@ impl PluginTool for EmailPlugin {
     fn name(&self) -> &'static str { "Local Mailbox" }
     
     fn can_fast_handle(&self, query: &SearchQuery) -> bool {
+        let lower = query.raw_text.to_lowercase();
         // Fast-pass routes directly when the user intends to query local emails
-        query.raw_text.starts_with("mail:") || query.raw_text.starts_with("email:")
+        lower.starts_with("mail:") || lower.starts_with("email:")
     }
     
     fn execute(&self, query: &SearchQuery) -> Vec<SearchResult> {
-        let clean_query = query.raw_text
-            .replace("mail:", "")
-            .replace("email:", "")
-            .trim()
-            .to_string();
+        let lower = query.raw_text.to_lowercase();
+        let clean_query = if lower.starts_with("mail:") {
+            query.raw_text[5..].trim().to_string()
+        } else if lower.starts_with("email:") {
+            query.raw_text[6..].trim().to_string()
+        } else {
+            query.raw_text.trim().to_string()
+        };
 
         if clean_query.is_empty() {
             return vec![];
@@ -54,8 +58,6 @@ impl PluginTool for EmailPlugin {
             query.prioritize_folders
         );
 
-        // We completely removed the `xdg-open` hack here.
-        // `ui.js` now handles the routing autonomously based on whether `gmail_url` is present in the database metadata.
         results
     }
 }

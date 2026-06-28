@@ -21,11 +21,17 @@ impl PluginTool for MathPlugin {
     fn name(&self) -> &'static str { "Local Calculator" }
     
     fn can_fast_handle(&self, query: &SearchQuery) -> bool {
-        query.raw_text.starts_with('=') || query.raw_text.starts_with("calc ")
+        let lower = query.raw_text.to_lowercase();
+        lower.starts_with('=') || lower.starts_with("calc ")
     }
     
     fn execute(&self, query: &SearchQuery) -> Vec<SearchResult> {
-        let expr = query.raw_text.replace("calc ", "").replace("=", "").trim().to_string();
+        let lower = query.raw_text.to_lowercase();
+        let expr = if lower.starts_with("calc ") {
+            query.raw_text[5..].trim().to_string()
+        } else {
+            query.raw_text.replace("=", "").trim().to_string()
+        };
         
         if !Self::is_safe_math_expression(&expr) {
             return vec![SearchResult {

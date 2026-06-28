@@ -538,13 +538,11 @@ export const GnomeLensVideoPreview = GObject.registerClass({
         if (!structure) return;
 
         let width = 0, height = 0;
-        try {
-            let [successW, w] = structure.get_int('width');
-            let [successH, h] = structure.get_int('height');
-            if (successW && successH) {
-                width = w; height = h;
-            }
-        } catch (e) { }
+        let [successW, w] = structure.get_int('width');
+        let [successH, h] = structure.get_int('height');
+        if (successW && successH) {
+            width = w; height = h;
+        }
         
         if (!width || !height || width <= 0 || height <= 0) return;
 
@@ -627,7 +625,7 @@ export const GnomeLensVideoPreview = GObject.registerClass({
                     }
 
                     this._imageActor.set_content(null);
-                    this._imageActor.style = `background-image: url("file://${tempFile}"); background-size: contain; background-repeat: no-repeat; background-position: center;`;
+                    this._imageActor.style = `background-image: url("file://${tempFile}"); background-size: contain; background-repeat: no-repeat;`;
                     
                     if (this._lastTempFile) {
                         let lastFile = Gio.File.new_for_path(this._lastTempFile);

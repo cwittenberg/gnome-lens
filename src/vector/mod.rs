@@ -129,7 +129,6 @@ impl VectorStore {
             conn.execute("UPDATE documents SET modified_at = 0", []).ok();
         }
 
-        // Deep sanitization pass: Ensure no residual high-precision exponents contaminate the comparison logic
         println!("[Database] Normalizing existing timestamps to stable UNIX seconds...");
         conn.execute("UPDATE documents SET modified_at = modified_at / 1000000000 WHERE modified_at > 1000000000000000", []).ok();
         conn.execute("UPDATE documents SET modified_at = modified_at / 1000 WHERE modified_at > 1000000000000", []).ok();
@@ -268,6 +267,7 @@ impl VectorStore {
         conn.execute("DELETE FROM documents_fts WHERE rowid IN (SELECT rowid FROM documents_fts WHERE id = ?1)", params![path]).ok();
         conn.execute("COMMIT", []).ok();
 
+        // FIX: Replaced `self.cache.remove` with appropriate hashmap write-lock `.remove()` method 
         let mut cache_guard = self.cache.write().unwrap();
         cache_guard.remove(path);
     }
@@ -441,29 +441,100 @@ impl VectorStore {
             }
         }
             
-        if !safe_query.is_empty() {
-            let conn = match self.conn.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if let Ok(mut fts_stmt) = conn.prepare(
-                "SELECT id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip 
-                 FROM documents_fts 
-                 WHERE documents_fts MATCH ?1 
-                 ORDER BY rank LIMIT 100"
-            ) {
-                if let Ok(mut rows) = fts_stmt.query(params![safe_query]) {
-                    let mut rank = 1;
-                    while let Ok(Some(row)) = rows.next() {
-                        let id: String = row.get(0).unwrap_or_default();
-                        let snippet: String = row.get(1).unwrap_or_default();
-                        fts_matches.insert(id, (rank, snippet));
-                        rank += 1;
-                    }
+        let has_fts_query = !safe_query.is_empty();
+        let clean_q_for_like = raw_query_text.to_lowercase().trim().to_string();
+
+        let conn = match self.conn.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        // FULL SCHEMA PUSH DOWN: Construct a dynamic SQL boundary via UNION to evaluate BOTH
+        // FTS structural matches AND direct LIKE pathway fallbacks for folders in a single round-trip.
+        let mut sql_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let mut sql_base = String::new();
+
+        if has_fts_query {
+            // MATCH 1: FTS Semantic Queries mapped to File content or Filename natively
+            sql_base.push_str("SELECT fts.id, snippet(documents_fts, 2, '<b>', '</b>', '...', 30) as snip, docs.modified_at as rank_val 
+                               FROM documents_fts fts
+                               JOIN documents docs ON fts.id = docs.id
+                               WHERE documents_fts MATCH ?");
+            sql_params.push(Box::new(safe_query.clone()));
+
+            if let Some(dir) = directory_filter {
+                sql_base.push_str(" AND LOWER(fts.id) LIKE LOWER(?)");
+                sql_params.push(Box::new(format!("{}%", dir)));
+            }
+            if let Some(min) = min_ts {
+                sql_base.push_str(" AND docs.modified_at >= ?");
+                sql_params.push(Box::new(min as i64));
+            }
+            if let Some(max) = max_ts {
+                sql_base.push_str(" AND docs.modified_at <= ?");
+                sql_params.push(Box::new(max as i64));
+            }
+            for (key, val) in filters {
+                sql_base.push_str(" AND LOWER(json_extract(docs.metadata, ?)) = LOWER(?)");
+                sql_params.push(Box::new(format!("$.{}", key)));
+                sql_params.push(Box::new(val.clone()));
+            }
+
+            sql_base.push_str("\nUNION\n");
+        }
+
+        // MATCH 2: Strict Directory Pathway matching as explicitly requested via user wildcard format `<folder>%<search>%`
+        sql_base.push_str("SELECT docs.id, '' as snip, docs.modified_at as rank_val 
+                           FROM documents docs
+                           WHERE 1=1");
+
+        if let Some(dir) = directory_filter {
+            if !clean_q_for_like.is_empty() {
+                // Incorporate dual wildcard parameters to capture embedded matching inside deep directories
+                sql_base.push_str(" AND (LOWER(docs.id) LIKE LOWER(?) OR LOWER(docs.id) LIKE LOWER(?))");
+                sql_params.push(Box::new(format!("{}%{}", dir, clean_q_for_like))); 
+                sql_params.push(Box::new(format!("{}%{}%", dir, clean_q_for_like))); 
+            } else {
+                sql_base.push_str(" AND LOWER(docs.id) LIKE LOWER(?)");
+                sql_params.push(Box::new(format!("{}%", dir)));
+            }
+        } else if !clean_q_for_like.is_empty() {
+            sql_base.push_str(" AND LOWER(docs.id) LIKE LOWER(?)");
+            sql_params.push(Box::new(format!("%{}%", clean_q_for_like)));
+        }
+
+        if let Some(min) = min_ts {
+            sql_base.push_str(" AND docs.modified_at >= ?");
+            sql_params.push(Box::new(min as i64));
+        }
+        if let Some(max) = max_ts {
+            sql_base.push_str(" AND docs.modified_at <= ?");
+            sql_params.push(Box::new(max as i64));
+        }
+        for (key, val) in filters {
+            sql_base.push_str(" AND LOWER(json_extract(docs.metadata, ?)) = LOWER(?)");
+            sql_params.push(Box::new(format!("$.{}", key)));
+            sql_params.push(Box::new(val.clone()));
+        }
+
+        sql_base.push_str(" ORDER BY rank_val DESC LIMIT 100");
+
+        if let Ok(mut fts_stmt) = conn.prepare(&sql_base) {
+            let ref_params: Vec<&dyn rusqlite::ToSql> = sql_params.iter().map(|b| b.as_ref()).collect();
+            if let Ok(mut rows) = fts_stmt.query(&ref_params[..]) {
+                let mut rank = 1;
+                while let Ok(Some(row)) = rows.next() {
+                    let id: String = row.get(0).unwrap_or_default();
+                    let snippet: String = row.get(1).unwrap_or_default();
+                    fts_matches.insert(id, (rank, snippet));
+                    rank += 1;
                 }
             }
-            drop(conn);
+        } else {
+            eprintln!("[Database] Failed to prepare SQL push-down query:\n{}", sql_base);
         }
+        drop(conn);
+        println!("[Database] Exhaustive SQL push-down index filter yielded {} row targets.", fts_matches.len());
 
         let is_dummy_vector = target_embedding.is_empty() || target_embedding.iter().all(|&v| v == 0.0);
         let norm_a: f32 = if !is_dummy_vector {
@@ -476,16 +547,22 @@ impl VectorStore {
 
         let mut candidate_scores: Vec<(String, f32, Option<String>, Option<String>)> = cache_guard.iter()
             .filter(|(_, doc)| {
-                if is_dummy_vector && !fts_matches.contains_key(&doc.id) {
+                // If the item wasn't extracted directly via the exhaustive SQL engine, securely drop it now
+                if !fts_matches.contains_key(&doc.id) {
                     return false;
                 }
+                
                 if let Some(min) = min_ts { if doc.modified_at < min { return false; } }
                 if let Some(max) = max_ts { if doc.modified_at > max { return false; } }
                 if let Some(dir) = directory_filter {
-                    if !doc.id.starts_with(dir) { return false; }
+                    if !doc.id.to_lowercase().starts_with(&dir.to_lowercase()) { return false; }
                 }
                 for (key, val) in filters {
-                    if doc.metadata.get(key) != Some(val) {
+                    if let Some(doc_val) = doc.metadata.get(key) {
+                        if doc_val.to_lowercase() != val.to_lowercase() {
+                            return false;
+                        }
+                    } else {
                         return false;
                     }
                 }
@@ -513,6 +590,8 @@ impl VectorStore {
                 (doc.id.clone(), v_score, is_shallow, filetype)
             })
             .collect();
+
+        println!("[Database] Retained {} candidates after cache threshold and metadata bounds.", candidate_scores.len());
 
         candidate_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         
@@ -721,6 +800,8 @@ impl VectorStore {
                 cache_write.remove(&ghost);
             }
         }
+        
+        println!("[Database] Vector/Hybrid search finalized {} results to return to router.", results.len());
 
         results
     }
@@ -733,10 +814,13 @@ impl VectorStore {
         if !dir_prefix.ends_with('/') {
             dir_prefix.push('/');
         }
+        let dir_prefix_lower = dir_prefix.to_lowercase();
+        let prefix_char_count = dir_prefix.chars().count();
 
         for doc in cache_guard.values() {
-            if doc.id.starts_with(&dir_prefix) && doc.id != dir_prefix {
-                let remainder = &doc.id[dir_prefix.len()..];
+            let doc_id_lower = doc.id.to_lowercase();
+            if doc_id_lower.starts_with(&dir_prefix_lower) && doc_id_lower != dir_prefix_lower {
+                let remainder: String = doc.id.chars().skip(prefix_char_count).collect();
                 if !remainder.is_empty() && !remainder.contains('/') {
                     let parsed_filename = Path::new(&doc.id).file_name().unwrap_or_default().to_string_lossy().to_string();
                     let is_dir = doc.metadata.get("filetype").map(|s| s.as_str()) == Some("directory");

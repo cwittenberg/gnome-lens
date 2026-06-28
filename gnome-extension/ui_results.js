@@ -138,6 +138,10 @@ class GnomeLensResultsList extends St.ScrollView {
         }
     }
 
+    clearSelection() {
+        this._setSelectedIndex(-1);
+    }
+
     _setSelectedIndex(index) {
         if (this._selectedIndex >= 0 && this._selectedIndex < this._resultWidgets.length) {
             this._resultWidgets[this._selectedIndex].remove_style_class_name('selected');

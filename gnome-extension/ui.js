@@ -40,6 +40,13 @@ export const GnomeLensUI = GObject.registerClass({
         this.isClosing = false;
         this._currentThemeFile = null;
 
+        this._isDragging = false;
+        this._dragStartX = 0;
+        this._dragStartY = 0;
+        this._dragStartWinX = 0;
+        this._dragStartWinY = 0;
+        this._userMoved = false;
+
         this._buildUI();
         
         this.connectObject('button-press-event', () => {
@@ -134,6 +141,22 @@ export const GnomeLensUI = GObject.registerClass({
         return { duration: baseDuration, mode: mode };
     }
 
+    _clearSearch() {
+        this._service.cancel();
+        this._lastResults = [];
+        this._activeFilter = 'All';
+        this._updateFilterPills([]);
+        this._resultsList.clear();
+        this._synthesis.setSynthesis(null);
+        this._status.stopAnimation();
+        this._status.setStatus('');
+        this._searchBar.stopPulse();
+        this._searchBar.setCount(0);
+        this._advancedFilters.clear();
+        this._updatePosition(false, true);
+        if (this._preview) this._preview.hide();
+    }
+
     _buildUI() {
         this._dialog = new St.BoxLayout({
             vertical: true,
@@ -145,8 +168,36 @@ export const GnomeLensUI = GObject.registerClass({
         this._dialog.set_scale(0.9, 0.9);
         this._dialog.set_opacity(0);
 
-        this._dialog.connectObject('button-press-event', () => {
+        this._dialog.connectObject('button-press-event', (actor, event) => {
+            if (event.get_button() === 1) {
+                let [x, y] = event.get_coords();
+                this._isDragging = true;
+                this._dragStartX = x;
+                this._dragStartY = y;
+                this._dragStartWinX = this._dialog.x;
+                this._dragStartWinY = this._dialog.y;
+            }
             return Clutter.EVENT_STOP;
+        }, this);
+
+        this._dialog.connectObject('motion-event', (actor, event) => {
+            if (this._isDragging) {
+                let [x, y] = event.get_coords();
+                let deltaX = x - this._dragStartX;
+                let deltaY = y - this._dragStartY;
+                this._dialog.set_position(this._dragStartWinX + deltaX, this._dragStartWinY + deltaY);
+                this._userMoved = true;
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        }, this);
+
+        this._dialog.connectObject('button-release-event', (actor, event) => {
+            if (event.get_button() === 1 && this._isDragging) {
+                this._isDragging = false;
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
         }, this);
 
         this._searchBar = new GnomeLensSearchBar(this._settings, {
@@ -156,21 +207,10 @@ export const GnomeLensUI = GObject.registerClass({
                 this._searchBar.toggleFilterActive(isVisible);
             },
             onClear: () => {
-                this._service.cancel();
-                this._lastResults = [];
-                this._activeFilter = 'All';
-                this._updateFilterPills([]);
-                this._resultsList.clear();
-                this._synthesis.setSynthesis(null);
-                this._status.stopAnimation();
-                this._status.setStatus('');
-                this._searchBar.stopPulse();
-                this._searchBar.setCount(0);
-                this._advancedFilters.clear();
-                this._updatePosition(false, true);
-                if (this._preview) this._preview.hide();
+                this._clearSearch();
             },
             onSearch: (text) => {
+                this._historyIndex = -1;
                 this._triggerBackendSearch(text);
             },
             onBack: () => {
@@ -179,7 +219,7 @@ export const GnomeLensUI = GObject.registerClass({
                     if (this._historyIndex < history.length - 1) {
                         this._historyIndex++;
                     }
-                    this._loadHistoryAt(this._historyIndex);
+                    this._loadHistoryAt(this._historyIndex, true);
                 }
             },
             onNavigateUp: () => {
@@ -191,7 +231,8 @@ export const GnomeLensUI = GObject.registerClass({
                     let history = this._settings.get_strv('search-history') || [];
                     if (this._historyIndex < history.length - 1) {
                         this._historyIndex++;
-                        this._loadHistoryAt(this._historyIndex);
+                        this._resultsList.clear(); 
+                        this._loadHistoryAt(this._historyIndex, false);
                     }
                 }
             },
@@ -204,10 +245,12 @@ export const GnomeLensUI = GObject.registerClass({
                 } else if (this._resultsList.getSelectedIndex() === -1) {
                     if (this._historyIndex > 0) {
                         this._historyIndex--;
-                        this._loadHistoryAt(this._historyIndex);
+                        this._resultsList.clear();
+                        this._loadHistoryAt(this._historyIndex, false);
                     } else if (this._historyIndex === 0) {
                         this._historyIndex = -1;
                         this._searchBar.setQuery('', false);
+                        this._clearSearch();
                     }
                 }
             },
@@ -233,8 +276,11 @@ export const GnomeLensUI = GObject.registerClass({
         this._advancedFilters = new GnomeLensAdvancedFilters({
             onFiltersChanged: () => {
                 let currentQuery = this._searchBar.getQuery();
-                if (currentQuery.trim().length > 0) {
+                let filterStr = this._advancedFilters.getFilterString();
+                if (currentQuery.trim().length > 0 || filterStr.length > 0) {
                     this._triggerBackendSearch(currentQuery);
+                } else {
+                    this._clearSearch();
                 }
             }
         });
@@ -306,7 +352,7 @@ export const GnomeLensUI = GObject.registerClass({
         }
 
         let ext = result.filepath.split('.').pop().toLowerCase();
-        let isVideo = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'mpg', 'wmv', 'mpeg'].includes(ext);
+        let isVideo = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'mpg', 'wmv'].includes(ext);
         let isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext);
 
         if (isVideo || isImage) {
@@ -431,6 +477,11 @@ export const GnomeLensUI = GObject.registerClass({
         let targetY = hasResults 
             ? Math.floor(monitor.height * 0.15) 
             : Math.floor(monitor.height * 0.35);
+
+        if (this._userMoved) {
+            targetX = this._dialog.x;
+            targetY = this._dialog.y;
+        }
             
         this._dialog.remove_transition('x');
         this._dialog.remove_transition('y');
@@ -519,6 +570,7 @@ export const GnomeLensUI = GObject.registerClass({
         this._historyIndex = -1;
         this._activeFilter = 'All';
         this._lastResults = [];
+        this._userMoved = false;
         this._updateFilterPills([]);
         this._updatePosition(this._resultsList.hasResults(), false);
         
@@ -608,10 +660,14 @@ export const GnomeLensUI = GObject.registerClass({
         return super.vfunc_key_press_event(keyEvent);
     }
 
-    _loadHistoryAt(index) {
+    _loadHistoryAt(index, triggerSearch = true) {
         let history = this._settings.get_strv('search-history') || [];
         if (index >= 0 && index < history.length) {
-            this._searchBar.setQuery(history[index], false);
+            let query = history[index];
+            this._searchBar.setQuery(query, false);
+            if (triggerSearch) {
+                this._triggerBackendSearch(query);
+            }
         }
     }
 
@@ -700,7 +756,12 @@ export const GnomeLensUI = GObject.registerClass({
         let filterStr = this._advancedFilters.getFilterString();
         let fullQuery = query;
         if (filterStr.length > 0) {
-            fullQuery = `${query} ${filterStr}`;
+            fullQuery = query.trim().length > 0 ? `${query} ${filterStr}` : filterStr;
+        }
+
+        if (fullQuery.trim().length === 0) {
+            this._clearSearch();
+            return;
         }
 
         this._service.cancel();
@@ -710,6 +771,10 @@ export const GnomeLensUI = GObject.registerClass({
         
         this._activeFilter = 'All';     
         this._updateFilterPills([]);
+        
+        if (this._resultsList && typeof this._resultsList.clearSelection === 'function') {
+            this._resultsList.clearSelection();
+        }
         
         let filterStrategy = this._settings.get_string('ai-filter-strategy');
         let prioritizeFolders = this._settings.get_boolean('prioritize-folders');
